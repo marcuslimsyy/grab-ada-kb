@@ -682,13 +682,23 @@ def compare_articles_detailed(grab_articles, ada_articles_data):
         'ada_ids': ada_ids
     }
 
-# Function to convert articles to Ada format - UPDATED WITH URL
+# Function to convert articles to Ada format - UPDATED WITH MOVEIT URL LOGIC
 def convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id):
     """Convert articles to Ada JSON format with correct structure including URL"""
     ada_articles = []
     for article in articles:
-        # Generate the URL using the pattern: https://help.grab.com/{user_type}/{language_locale}/{article_id}
-        article_url = f"https://help.grab.com/{user_type}/{language_locale}/{article['id']}"
+        # Generate the URL based on user type
+        if user_type in ['moveitpassenger', 'moveitdriver']:
+            # For MoveIt users, use moveit.com.ph domain and map user types
+            if user_type == 'moveitpassenger':
+                mapped_user_type = 'passenger'
+            elif user_type == 'moveitdriver':
+                mapped_user_type = 'driver'
+            
+            article_url = f"https://help.moveit.com.ph/{mapped_user_type}/{language_locale}/{article['id']}"
+        else:
+            # For regular Grab users, use grab.com domain
+            article_url = f"https://help.grab.com/{user_type}/{language_locale}/{article['id']}"
         
         # Use the Grab article ID as the Ada article ID
         ada_article = {
@@ -696,7 +706,7 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
             "name": article['name'] or f"Article {article['id']}",  # Use 'name' not 'title'
             "content": article['body'] or "",  # Content in markdown format
             "knowledge_source_id": knowledge_source_id,  # Required field
-            "url": article_url  # Add URL field
+            "url": article_url  # Add URL field with correct domain
         }
         ada_articles.append(ada_article)
     
@@ -1804,7 +1814,7 @@ if 'comparison_result' in st.session_state and st.session_state.comparison_resul
         if selected_for_addition:
             st.write(f"**{len(selected_for_addition)} articles selected for addition to Ada**")
             
-            # Preview what will be sent - UPDATED with URL
+            # Preview what will be sent - UPDATED with correct URL pattern
             if st.checkbox("🔍 Preview articles that will be added to Ada"):
                 if selected_for_addition:
                     sample_ada_data = convert_to_ada_format(
@@ -1815,7 +1825,14 @@ if 'comparison_result' in st.session_state and st.session_state.comparison_resul
                     )
                     st.write("**Preview of data format:**")
                     st.write(f"**Target Knowledge Source ID:** `{comparison_knowledge_source_id}`")
-                    st.write(f"**Sample URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+                    
+                    # Show correct URL pattern based on user type
+                    if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
+                        mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
+                        st.write(f"**Sample URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
+                    else:
+                        st.write(f"**Sample URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+                    
                     st.json(sample_ada_data[0] if sample_ada_data else {})
                     if len(sample_ada_data) > 1:
                         st.write(f"... and {len(selected_for_addition)-1} more articles")
@@ -1960,7 +1977,14 @@ if 'production_articles' in st.session_state:
             if ada_format_data:
                 st.write("**Sample Ada format:**")
                 st.write(f"**Knowledge Source ID:** `{preview_knowledge_source_id}`")
-                st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+                
+                # Show correct URL pattern based on user type
+                if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
+                    mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
+                    st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
+                else:
+                    st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+                
                 sample_article = ada_format_data[0]
                 st.json(sample_article)
 
@@ -2009,7 +2033,7 @@ if 'production_articles' in st.session_state:
     if default_upload_id:
         st.info("💡 Knowledge Source ID auto-filled from your selection above")
     
-    # Preview what will be sent - UPDATED with URL visible
+    # Preview what will be sent - UPDATED with correct URL pattern
     if st.checkbox("🔍 Preview data that will be sent to Ada"):
         if articles_to_upload and knowledge_source_id:
             sample_ada_data = convert_to_ada_format(
@@ -2022,13 +2046,20 @@ if 'production_articles' in st.session_state:
             st.write(f"**Target Knowledge Source ID:** `{knowledge_source_id}`")
             st.write(f"**Total Articles to Upload:** {len(articles_to_upload)}")
             
+            # Show correct URL pattern based on user type
+            if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
+                mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
+                st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
+            else:
+                st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+            
             if sample_ada_data:
                 st.write("**Sample Article Structure:**")
                 st.json(sample_ada_data[0])
                 if len(sample_ada_data) > 1:
                     st.write(f"... and {len(articles_to_upload)-1} more articles with the same structure")
                 
-                # Show a summary table - UPDATED with URL column
+                # Show a summary table - with URL column
                 preview_summary = []
                 for i, article in enumerate(sample_ada_data):
                     preview_summary.append({
@@ -2036,7 +2067,7 @@ if 'production_articles' in st.session_state:
                         'Name': article['name'][:50] + "..." if len(article['name']) > 50 else article['name'],
                         'Content Length': len(article['content']),
                         'Knowledge Source ID': article['knowledge_source_id'],
-                        'URL': article['url']  # Add URL column
+                        'URL': article['url']
                     })
                 
                 st.write("**Preview Summary:**")
