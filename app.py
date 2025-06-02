@@ -1495,8 +1495,6 @@ default_comparison_id = ""
 if 'selected_knowledge_source_id' in st.session_state:
     default_comparison_id = st.session_state.selected_knowledge_source_id
 
-# Article Comparison and Cleanup Section
-st.header("🔄 Step 2: Advanced Article Comparison & Management")
 
 # Auto-populate knowledge source ID if one was selected above
 default_comparison_id = ""
