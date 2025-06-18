@@ -682,10 +682,14 @@ def compare_articles_detailed(grab_articles, ada_articles_data):
         'ada_ids': ada_ids
     }
 
-# Function to convert articles to Ada format - UPDATED WITH MOVEIT URL LOGIC
-def convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id):
-    """Convert articles to Ada JSON format with correct structure including URL"""
+# Function to convert articles to Ada format - UPDATED WITH LANGUAGE AND NAME PREFIX OPTIONS
+def convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id, override_language=None, name_prefix=None):
+    """Convert articles to Ada JSON format with correct structure including URL, language, and name prefix"""
     ada_articles = []
+    
+    # Determine the language to use
+    language_to_use = override_language if override_language else language_locale
+    
     for article in articles:
         # Generate the URL based on user type
         if user_type in ['moveitpassenger', 'moveitdriver']:
@@ -700,13 +704,19 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
             # For regular Grab users, use grab.com domain
             article_url = f"https://help.grab.com/{user_type}/{language_locale}/{article['id']}"
         
+        # Prepare the article name with optional prefix
+        article_name = article['name'] or f"Article {article['id']}"
+        if name_prefix:
+            article_name = f"{name_prefix}{article_name}"
+        
         # Use the Grab article ID as the Ada article ID
         ada_article = {
             "id": str(article['id']),  # Use article ID directly
-            "name": article['name'] or f"Article {article['id']}",  # Use 'name' not 'title'
+            "name": article_name,  # Use 'name' not 'title' with optional prefix
             "content": article['body'] or "",  # Content in markdown format
             "knowledge_source_id": knowledge_source_id,  # Required field
-            "url": article_url  # Add URL field with correct domain
+            "url": article_url,  # Add URL field with correct domain
+            "language": language_to_use  # Add language field
         }
         ada_articles.append(ada_article)
     
@@ -726,6 +736,7 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
         st.write(f"🔄 **Creating article {index}/{total}:** {article_name[:60]}{'...' if len(article_name) > 60 else ''}")
         st.write(f"📋 **Article ID:** `{article_id}`")
         st.write(f"🗂️ **Knowledge Source:** `{article_data.get('knowledge_source_id', 'Unknown')}`")
+        st.write(f"🌐 **Language:** `{article_data.get('language', 'Unknown')}`")
         
         # Show a small progress indicator
         progress_text = st.empty()
@@ -765,6 +776,7 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
             response_data={
                 "article_id": article_data.get('id'), 
                 "article_name": article_data.get('name'),
+                "language": article_data.get('language'),
                 "endpoint_used": url,
                 "response_data": response.json() if response.status_code in [200, 201] else None
             }
@@ -775,6 +787,7 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
             with status_container.container():
                 st.success(f"✅ **Successfully created:** {article_name}")
                 st.write(f"📋 **Article ID:** `{article_id}`")
+                st.write(f"🌐 **Language:** `{article_data.get('language', 'Unknown')}`")
                 st.write(f"🌐 **Endpoint Used:** {url}")
                 st.write(f"⏱️ **Response Time:** {end_time - start_time:.2f} seconds")
                 st.write("---")
@@ -840,14 +853,14 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
         
         return False, f"Error: {e}. Details: {error_detail}"
 
-# Function to create articles individually with real-time status - ENHANCED
-def create_articles_individually_with_status(articles, instance_name, knowledge_source_id, api_key, user_type, language_locale):
+# Function to create articles individually with real-time status - ENHANCED WITH LANGUAGE AND NAME PREFIX
+def create_articles_individually_with_status(articles, instance_name, knowledge_source_id, api_key, user_type, language_locale, override_language=None, name_prefix=None):
     """Create articles in Ada knowledge base with real-time status updates"""
     if not all([instance_name, knowledge_source_id, api_key]):
         return False, "Missing configuration"
     
-    # Convert articles to Ada format
-    ada_articles = convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id)
+    # Convert articles to Ada format with language and name prefix options
+    ada_articles = convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id, override_language, name_prefix)
     
     successful_uploads = []
     failed_uploads = []
@@ -868,7 +881,7 @@ def create_articles_individually_with_status(articles, instance_name, knowledge_
         url="Individual Article Creation Process",
         status_code=200,
         success=True,
-        details=f"Starting individual creation of {len(ada_articles)} articles"
+        details=f"Starting individual creation of {len(ada_articles)} articles with language: {override_language or language_locale}" + (f" and name prefix: '{name_prefix}'" if name_prefix else "")
     )
     
     # Initial metrics display
@@ -958,7 +971,9 @@ def create_articles_individually_with_status(articles, instance_name, knowledge_
             "successful": len(successful_uploads),
             "failed": len(failed_uploads),
             "total": len(ada_articles),
-            "total_time": total_time
+            "total_time": total_time,
+            "language_used": override_language or language_locale,
+            "name_prefix_used": name_prefix
         }
     )
     
@@ -1286,6 +1301,56 @@ if filter_testing:
 if filter_empty:
     st.sidebar.write("Will exclude articles with no content")
 
+# NEW: Ada Payload Options
+st.sidebar.subheader("🔧 Ada Payload Options")
+
+# Language Override Option
+override_language_enabled = st.sidebar.checkbox(
+    "Override Language Code", 
+    value=False,
+    help="Check this to use a different language code in the Ada payload than the one from Grab's JSON"
+)
+
+if override_language_enabled:
+    override_language = st.sidebar.text_input(
+        "Custom Language Code:",
+        value=language_locale,
+        placeholder="e.g., en-us, zh-cn, id-id",
+        help="This will be used as the 'language' field in the Ada payload"
+    )
+else:
+    override_language = None
+
+# Name Prefix Option
+name_prefix_enabled = st.sidebar.checkbox(
+    "Add Name Prefix", 
+    value=False,
+    help="Check this to add a prefix to all article names in the Ada payload"
+)
+
+if name_prefix_enabled:
+    name_prefix = st.sidebar.text_input(
+        "Name Prefix:",
+        value="",
+        placeholder="e.g., 'Production - ', '[LIVE] ', 'Help: '",
+        help="This text will be added to the beginning of each article name"
+    )
+    
+    if name_prefix:
+        st.sidebar.info(f"Example: '{name_prefix}How to book a ride'")
+else:
+    name_prefix = None
+
+# Show the language configuration summary
+st.sidebar.write("**Language Configuration:**")
+if override_language_enabled and override_language:
+    st.sidebar.write(f"🔄 Using custom language: `{override_language}`")
+else:
+    st.sidebar.write(f"📍 Using Grab's language: `{language_locale}`")
+
+if name_prefix_enabled and name_prefix:
+    st.sidebar.write(f"🏷️ Name prefix: `{name_prefix}`")
+
 # Knowledge Source Management Section
 st.header("🗂️ Ada Knowledge Source Management")
 
@@ -1497,512 +1562,519 @@ if 'production_articles' in st.session_state:
 
 st.divider()
 
-# Article Comparison and Cleanup Section
-st.header("🔄 Step 2: Advanced Article Comparison & Management")
-
-# Auto-populate knowledge source ID if one was selected above
-default_comparison_id = ""
-if 'selected_knowledge_source_id' in st.session_state:
-    default_comparison_id = st.session_state.selected_knowledge_source_id
-
-
-# Auto-populate knowledge source ID if one was selected above
-default_comparison_id = ""
-if 'selected_knowledge_source_id' in st.session_state:
-    default_comparison_id = st.session_state.selected_knowledge_source_id
-
-# Add UI for filtering options
-st.subheader("🔧 Article Retrieval Options")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    # Option to filter by knowledge source
-    filter_by_source = st.checkbox("Filter by Knowledge Source", value=True, help="Check this to filter articles by a specific knowledge source. Uncheck to get all articles.")
-
-with col2:
-    # Knowledge source ID input (only show if filtering is enabled)
-    if filter_by_source:
-        comparison_knowledge_source_id = st.text_input(
-            "Knowledge Source ID:", 
-            value=default_comparison_id,
-            help="Enter the ID of the knowledge source to compare with Grab articles",
-            key="comparison_source_id"
-        )
-    else:
-        comparison_knowledge_source_id = None
-        st.info("Will retrieve ALL articles from Ada (no filtering)")
-
-# Show helpful message if auto-populated
-if default_comparison_id and filter_by_source:
-    st.info("💡 Knowledge Source ID auto-filled from your selection above")
-
-# Show the endpoint that will be used
-if filter_by_source and comparison_knowledge_source_id:
-    st.code(f"GET https://{instance_name if instance_name else '{instance_name}'}.ada.support/api/v2/knowledge/articles/?knowledge_source_id={comparison_knowledge_source_id}")
-else:
-    st.code(f"GET https://{instance_name if instance_name else '{instance_name}'}.ada.support/api/v2/knowledge/articles/")
-
-# Show helpful message if auto-populated
-if default_comparison_id:
-    st.info("💡 Knowledge Source ID auto-filled from your selection above")
-
-# STEP 1: Retrieve Articles from Ada
-st.subheader("📥 Step 2.1: Retrieve Articles from Ada")
-
-if st.button("🔍 Step 1: Get Articles from Ada Knowledge Source", type="secondary"):
-    if not all([instance_name, api_key]):
-        st.error("Please configure Ada API settings in the sidebar first")
-    elif filter_by_source and not comparison_knowledge_source_id:
-        st.error("Please enter a Knowledge Source ID or uncheck 'Filter by Knowledge Source'")
-    elif 'all_articles' not in st.session_state:
-        st.error("Please fetch articles from Grab first (Step 1)")
-    else:
-        with st.spinner("Retrieving articles from Ada knowledge base..."):
-            # Get articles from Ada using robust method
-            success, ada_result = get_ada_articles_robust(instance_name, api_key, comparison_knowledge_source_id)
-            
-            if success:
-                st.session_state.ada_articles_result = ada_result
-                st.session_state.comparison_source_id = comparison_knowledge_source_id
-                st.session_state.filter_by_source = filter_by_source
-                
-                # Display Ada articles summary
-                ada_count = len(ada_result.get('data', []))
-                
-                if filter_by_source and comparison_knowledge_source_id:
-                    st.success(f"✅ Retrieved {ada_count} articles from knowledge source: {comparison_knowledge_source_id}")
-                else:
-                    st.success(f"✅ Retrieved {ada_count} total articles from Ada")
-                
-                if ada_count > 0:
-                    # Show preview of Ada articles
-                    ada_articles = ada_result['data']
-                    preview_data = []
-                    for article in ada_articles[:5]:  # Show first 5
-                        preview_data.append({
-                            'Ada ID': article.get('id', 'N/A'),
-                            'Name': article.get('name', 'No name'),
-                            'Knowledge Source': article.get('knowledge_source_id', 'N/A'),
-                            'Content Length': len(article.get('content', ''))
-                        })
-                    
-                    st.write("**Preview of Ada Articles:**")
-                    preview_df = pd.DataFrame(preview_data)
-                    st.dataframe(preview_df)
-                    
-                    st.info("✅ Ada articles retrieved successfully. Proceed to Step 2 for comparison.")
-                else:
-                    if filter_by_source:
-                        st.warning("Knowledge source is empty or doesn't exist. No articles to compare.")
-                    else:
-                        st.warning("No articles found in Ada. No articles to compare.")
-                        
-            else:
-                st.error(f"Failed to fetch articles from Ada: {ada_result}")
-
-# STEP 2: Compare Articles
-st.subheader("⚖️ Step 2.2: Compare Articles")
-
-if st.button("🔍 Step 2: Compare Grab vs Ada Articles", type="secondary"):
-    if 'ada_articles_result' not in st.session_state:
-        st.error("Please complete Step 1 first (Get Articles from Ada)")
-    elif 'all_articles' not in st.session_state:
-        st.error("Please fetch articles from Grab first (main Step 1)")
-    else:
-        with st.spinner("Comparing articles..."):
-            # Perform detailed comparison
-            comparison_result = compare_articles_detailed(
-                st.session_state.all_articles, 
-                st.session_state.ada_articles_result
-            )
-            
-            st.session_state.comparison_result = comparison_result
-            
-            # Display comparison results
-            st.success("✅ Article comparison completed!")
-            
-            # Show summary metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("📄 Grab Articles", comparison_result['grab_total'])
-            with col2:
-                st.metric("📄 Ada Articles", comparison_result['ada_total'])
-            with col3:
-                st.metric("🗑️ To Delete from Ada", len(comparison_result['articles_to_delete']))
-            with col4:
-                st.metric("➕ To Add to Ada", len(comparison_result['articles_to_add']))
-            
-            # Show existing articles
-            if comparison_result['articles_existing']:
-                st.info(f"✅ {len(comparison_result['articles_existing'])} articles exist in both Grab and Ada")
-            
-            # Show details
-            if comparison_result['articles_to_delete'] or comparison_result['articles_to_add']:
-                st.info("📋 Detailed results available in Steps 3 and 4 below")
-            else:
-                st.success("🎉 All articles are in sync! No actions needed.")
-
-# STEP 3: Delete Articles from Ada
-st.subheader("🗑️ Step 2.3: Delete Articles from Ada")
-
-if 'comparison_result' in st.session_state and st.session_state.comparison_result['articles_to_delete']:
-    articles_to_delete = st.session_state.comparison_result['articles_to_delete']
+# SECTION 2: Article Comparison and Cleanup Section (COLLAPSED)
+with st.expander("🔄 Step 2: Advanced Article Comparison & Management", expanded=False):
+    st.write("This section allows you to compare articles between Grab and Ada, and manage them.")
     
-    st.warning(f"Found {len(articles_to_delete)} articles in Ada that no longer exist in Grab")
-    
-    # Show articles to delete with selection
-    st.write("**Articles to Delete from Ada:**")
-    
-    # Create selection interface
-    delete_selections = {}
-    delete_data = []
-    
-    for i, article in enumerate(articles_to_delete):
-        article_id = article.get('id', 'Unknown')
-        name = article.get('name', 'No name')
-        
-        # Create checkbox for each article
-        delete_selections[article_id] = st.checkbox(
-            f"Delete: {name} (ID: {article_id})",
-            key=f"delete_{article_id}",
-            value=False
-        )
-        
-        delete_data.append({
-            'Select': delete_selections[article_id],
-            'Ada ID': article_id,
-            'Name': name,
-            'Knowledge Source': article.get('knowledge_source_id', 'N/A')
-        })
-    
-    # Show table of articles to delete
-    delete_df = pd.DataFrame(delete_data)
-    st.dataframe(delete_df)
-    
-    # Bulk selection options
+    # Auto-populate knowledge source ID if one was selected above
+    default_comparison_id = ""
+    if 'selected_knowledge_source_id' in st.session_state:
+        default_comparison_id = st.session_state.selected_knowledge_source_id
+
+    # Add UI for filtering options
+    st.subheader("🔧 Article Retrieval Options")
+
     col1, col2 = st.columns(2)
+
     with col1:
-        if st.button("Select All for Deletion"):
-            for article_id in delete_selections.keys():
-                st.session_state[f"delete_{article_id}"] = True
-            st.rerun()
-    
+        # Option to filter by knowledge source
+        filter_by_source = st.checkbox("Filter by Knowledge Source", value=True, help="Check this to filter articles by a specific knowledge source. Uncheck to get all articles.")
+
     with col2:
-        if st.button("Deselect All"):
-            for article_id in delete_selections.keys():
-                st.session_state[f"delete_{article_id}"] = False
-            st.rerun()
-    
-    # Delete selected articles
-    selected_for_deletion = [
-        article for article in articles_to_delete 
-        if st.session_state.get(f"delete_{article.get('id')}", False)
-    ]
-    
-    if selected_for_deletion:
-        st.write(f"**{len(selected_for_deletion)} articles selected for deletion**")
-        
-        if st.checkbox("I understand this will permanently delete the selected articles from Ada"):
-            if st.button("🗑️ Delete Selected Articles from Ada", type="primary"):
-                article_ids = [article.get('id') for article in selected_for_deletion]
-                
-                success, result = bulk_delete_ada_articles(instance_name, api_key, article_ids)
+        # Knowledge source ID input (only show if filtering is enabled)
+        if filter_by_source:
+            comparison_knowledge_source_id = st.text_input(
+                "Knowledge Source ID:", 
+                value=default_comparison_id,
+                help="Enter the ID of the knowledge source to compare with Grab articles",
+                key="comparison_source_id"
+            )
+        else:
+            comparison_knowledge_source_id = None
+            st.info("Will retrieve ALL articles from Ada (no filtering)")
+
+    # Show helpful message if auto-populated
+    if default_comparison_id and filter_by_source:
+        st.info("💡 Knowledge Source ID auto-filled from your selection above")
+
+    # Show the endpoint that will be used
+    if filter_by_source and comparison_knowledge_source_id:
+        st.code(f"GET https://{instance_name if instance_name else '{instance_name}'}.ada.support/api/v2/knowledge/articles/?knowledge_source_id={comparison_knowledge_source_id}")
+    else:
+        st.code(f"GET https://{instance_name if instance_name else '{instance_name}'}.ada.support/api/v2/knowledge/articles/")
+
+    # STEP 1: Retrieve Articles from Ada
+    st.subheader("📥 Step 2.1: Retrieve Articles from Ada")
+
+    if st.button("🔍 Step 1: Get Articles from Ada Knowledge Source", type="secondary", key="comparison_step1"):
+        if not all([instance_name, api_key]):
+            st.error("Please configure Ada API settings in the sidebar first")
+        elif filter_by_source and not comparison_knowledge_source_id:
+            st.error("Please enter a Knowledge Source ID or uncheck 'Filter by Knowledge Source'")
+        elif 'all_articles' not in st.session_state:
+            st.error("Please fetch articles from Grab first (Step 1)")
+        else:
+            with st.spinner("Retrieving articles from Ada knowledge base..."):
+                # Get articles from Ada using robust method
+                success, ada_result = get_ada_articles_robust(instance_name, api_key, comparison_knowledge_source_id)
                 
                 if success:
-                    # Show results
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.metric("✅ Successful", result['successful'])
-                    with col2:
-                        st.metric("❌ Failed", result['failed'])
-                    with col3:
-                        success_rate = (result['successful'] / result['total_processed']) * 100 if result['total_processed'] > 0 else 0
-                        st.metric("📊 Success Rate", f"{success_rate:.1f}%")
+                    st.session_state.ada_articles_result = ada_result
+                    st.session_state.comparison_source_id = comparison_knowledge_source_id
+                    st.session_state.filter_by_source = filter_by_source
                     
-                    if result['successful'] > 0:
-                        st.success(f"✅ Successfully deleted {result['successful']} articles from Ada")
+                    # Display Ada articles summary
+                    ada_count = len(ada_result.get('data', []))
                     
-                    if result['failed'] > 0:
-                        with st.expander(f"Failed Deletions ({result['failed']})"):
-                            for failed in result['failed_deletions']:
-                                st.error(f"Article ID: {failed['article_id']} - Error: {failed['error']}")
+                    if filter_by_source and comparison_knowledge_source_id:
+                        st.success(f"✅ Retrieved {ada_count} articles from knowledge source: {comparison_knowledge_source_id}")
+                    else:
+                        st.success(f"✅ Retrieved {ada_count} total articles from Ada")
                     
-                    # Refresh comparison after deletion
-                    st.info("💡 Run the comparison again to see updated results")
+                    if ada_count > 0:
+                        # Show preview of Ada articles
+                        ada_articles = ada_result['data']
+                        preview_data = []
+                        for article in ada_articles[:5]:  # Show first 5
+                            preview_data.append({
+                                'Ada ID': article.get('id', 'N/A'),
+                                'Name': article.get('name', 'No name'),
+                                'Knowledge Source': article.get('knowledge_source_id', 'N/A'),
+                                'Language': article.get('language', 'N/A'),  # NEW: Show language
+                                'Content Length': len(article.get('content', ''))
+                            })
+                        
+                        st.write("**Preview of Ada Articles:**")
+                        preview_df = pd.DataFrame(preview_data)
+                        st.dataframe(preview_df)
+                        
+                        st.info("✅ Ada articles retrieved successfully. Proceed to Step 2 for comparison.")
+                    else:
+                        if filter_by_source:
+                            st.warning("Knowledge source is empty or doesn't exist. No articles to compare.")
+                        else:
+                            st.warning("No articles found in Ada. No articles to compare.")
+                            
                 else:
-                    st.error(f"❌ Failed to delete articles: {result}")
+                    st.error(f"Failed to fetch articles from Ada: {ada_result}")
 
-elif 'comparison_result' in st.session_state:
-    st.success("✅ No articles need to be deleted from Ada")
-else:
-    st.info("👆 Complete Step 2 (Compare Articles) to see articles that need deletion")
+    # STEP 2: Compare Articles
+    st.subheader("⚖️ Step 2.2: Compare Articles")
 
-# STEP 4: Add New Articles to Ada
-st.subheader("➕ Step 2.4: Add New Articles to Ada")
+    if st.button("🔍 Step 2: Compare Grab vs Ada Articles", type="secondary", key="comparison_step2"):
+        if 'ada_articles_result' not in st.session_state:
+            st.error("Please complete Step 1 first (Get Articles from Ada)")
+        elif 'all_articles' not in st.session_state:
+            st.error("Please fetch articles from Grab first (main Step 1)")
+        else:
+            with st.spinner("Comparing articles..."):
+                # Perform detailed comparison
+                comparison_result = compare_articles_detailed(
+                    st.session_state.all_articles, 
+                    st.session_state.ada_articles_result
+                )
+                
+                st.session_state.comparison_result = comparison_result
+                
+                # Display comparison results
+                st.success("✅ Article comparison completed!")
+                
+                # Show summary metrics
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("📄 Grab Articles", comparison_result['grab_total'])
+                with col2:
+                    st.metric("📄 Ada Articles", comparison_result['ada_total'])
+                with col3:
+                    st.metric("🗑️ To Delete from Ada", len(comparison_result['articles_to_delete']))
+                with col4:
+                    st.metric("➕ To Add to Ada", len(comparison_result['articles_to_add']))
+                
+                # Show existing articles
+                if comparison_result['articles_existing']:
+                    st.info(f"✅ {len(comparison_result['articles_existing'])} articles exist in both Grab and Ada")
+                
+                # Show details
+                if comparison_result['articles_to_delete'] or comparison_result['articles_to_add']:
+                    st.info("📋 Detailed results available in Steps 3 and 4 below")
+                else:
+                    st.success("🎉 All articles are in sync! No actions needed.")
 
-if 'comparison_result' in st.session_state and st.session_state.comparison_result['articles_to_add']:
-    articles_to_add = st.session_state.comparison_result['articles_to_add']
-    
-    st.info(f"Found {len(articles_to_add)} new articles in Grab that need to be added to Ada")
-    
-    # Show articles to add with selection
-    st.write("**New Articles to Add to Ada:**")
-    
-    # Filter articles_to_add to only include production articles
-    if 'production_articles' in st.session_state:
-        production_ids = set(str(article['id']) for article in st.session_state.production_articles)
-        articles_to_add_filtered = [
-            article for article in articles_to_add 
-            if str(article['id']) in production_ids
-        ]
-    else:
-        articles_to_add_filtered = articles_to_add
-    
-    if len(articles_to_add_filtered) != len(articles_to_add):
-        st.warning(f"Note: {len(articles_to_add) - len(articles_to_add_filtered)} articles were filtered out (testing/empty articles)")
-    
-    # Create selection interface
-    add_selections = {}
-    add_data = []
-    
-    for i, article in enumerate(articles_to_add_filtered):
-        article_id = str(article.get('id', 'Unknown'))
-        name = article.get('name', 'No name')
-        content_length = len(article.get('body', ''))
+    # STEP 3: Delete Articles from Ada
+    st.subheader("🗑️ Step 2.3: Delete Articles from Ada")
+
+    if 'comparison_result' in st.session_state and st.session_state.comparison_result['articles_to_delete']:
+        articles_to_delete = st.session_state.comparison_result['articles_to_delete']
         
-        # Create checkbox for each article
-        add_selections[article_id] = st.checkbox(
-            f"Add: {name} ({content_length} chars)",
-            key=f"add_{article_id}",
-            value=True  # Default to selected
-        )
+        st.warning(f"Found {len(articles_to_delete)} articles in Ada that no longer exist in Grab")
         
-        add_data.append({
-            'Select': add_selections[article_id],
-            'ID': article_id,
-            'Name': name,
-            'Content Length': content_length,
-            'Content Preview': article.get('body', '')[:100] + "..." if len(article.get('body', '')) > 100 else article.get('body', '')
-        })
-    
-    # Show table of articles to add
-    if add_data:
-        add_df = pd.DataFrame(add_data)
-        st.dataframe(add_df)
+        # Show articles to delete with selection
+        st.write("**Articles to Delete from Ada:**")
+        
+        # Create selection interface
+        delete_selections = {}
+        delete_data = []
+        
+        for i, article in enumerate(articles_to_delete):
+            article_id = article.get('id', 'Unknown')
+            name = article.get('name', 'No name')
+            
+            # Create checkbox for each article
+            delete_selections[article_id] = st.checkbox(
+                f"Delete: {name} (ID: {article_id})",
+                key=f"delete_{article_id}",
+                value=False
+            )
+            
+            delete_data.append({
+                'Select': delete_selections[article_id],
+                'Ada ID': article_id,
+                'Name': name,
+                'Knowledge Source': article.get('knowledge_source_id', 'N/A'),
+                'Language': article.get('language', 'N/A')  # NEW: Show language
+            })
+        
+        # Show table of articles to delete
+        delete_df = pd.DataFrame(delete_data)
+        st.dataframe(delete_df)
         
         # Bulk selection options
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Select All for Addition"):
-                for article_id in add_selections.keys():
-                    st.session_state[f"add_{article_id}"] = True
+            if st.button("Select All for Deletion", key="select_all_deletion"):
+                for article_id in delete_selections.keys():
+                    st.session_state[f"delete_{article_id}"] = True
                 st.rerun()
         
         with col2:
-            if st.button("Deselect All for Addition"):
-                for article_id in add_selections.keys():
-                    st.session_state[f"add_{article_id}"] = False
+            if st.button("Deselect All", key="deselect_all_deletion"):
+                for article_id in delete_selections.keys():
+                    st.session_state[f"delete_{article_id}"] = False
                 st.rerun()
         
-        # Add selected articles
-        selected_for_addition = [
-            article for article in articles_to_add_filtered 
-            if st.session_state.get(f"add_{str(article.get('id'))}", True)
+        # Delete selected articles
+        selected_for_deletion = [
+            article for article in articles_to_delete 
+            if st.session_state.get(f"delete_{article.get('id')}", False)
         ]
         
-        if selected_for_addition:
-            st.write(f"**{len(selected_for_addition)} articles selected for addition to Ada**")
+        if selected_for_deletion:
+            st.write(f"**{len(selected_for_deletion)} articles selected for deletion**")
             
-            # Preview what will be sent - UPDATED with correct URL pattern
-            if st.checkbox("🔍 Preview articles that will be added to Ada"):
-                if selected_for_addition:
-                    sample_ada_data = convert_to_ada_format(
-                        selected_for_addition[:2], 
-                        st.session_state.user_type, 
-                        st.session_state.language_locale,
-                        comparison_knowledge_source_id
-                    )
-                    st.write("**Preview of data format:**")
-                    st.write(f"**Target Knowledge Source ID:** `{comparison_knowledge_source_id}`")
+            if st.checkbox("I understand this will permanently delete the selected articles from Ada", key="confirm_deletion"):
+                if st.button("🗑️ Delete Selected Articles from Ada", type="primary", key="delete_articles"):
+                    article_ids = [article.get('id') for article in selected_for_deletion]
                     
-                    # Show correct URL pattern based on user type
-                    if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
-                        mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
-                        st.write(f"**Sample URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
-                    else:
-                        st.write(f"**Sample URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
-                    
-                    st.json(sample_ada_data[0] if sample_ada_data else {})
-                    if len(sample_ada_data) > 1:
-                        st.write(f"... and {len(selected_for_addition)-1} more articles")
-            
-            if st.button("➕ Add Selected Articles to Ada", type="primary"):
-                if not comparison_knowledge_source_id:
-                    st.error("Please ensure Knowledge Source ID is provided")
-                else:
-                    st.info("🚀 Starting real-time article upload process...")
-                    
-                    success, result = create_articles_individually_with_status(
-                        selected_for_addition,
-                        instance_name,
-                        comparison_knowledge_source_id,
-                        api_key,
-                        st.session_state.user_type,
-                        st.session_state.language_locale
-                    )
+                    success, result = bulk_delete_ada_articles(instance_name, api_key, article_ids)
                     
                     if success:
-                        st.balloons()
-                        
-                        # Final summary
-                        st.subheader("🎉 Upload Complete!")
+                        # Show results
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("✅ Successful", result['successful'])
+                        with col2:
+                            st.metric("❌ Failed", result['failed'])
+                        with col3:
+                            success_rate = (result['successful'] / result['total_processed']) * 100 if result['total_processed'] > 0 else 0
+                            st.metric("📊 Success Rate", f"{success_rate:.1f}%")
                         
                         if result['successful'] > 0:
-                            st.success(f"✅ Successfully uploaded {result['successful']} articles to Ada!")
+                            st.success(f"✅ Successfully deleted {result['successful']} articles from Ada")
                         
                         if result['failed'] > 0:
-                            st.error(f"❌ {result['failed']} articles failed to upload")
-                            
-                            # Show failed articles summary
-                            with st.expander(f"Failed Articles Details ({result['failed']})"):
-                                for failed in result['failed_uploads']:
-                                    st.error(f"**{failed['article']['name']}**")
-                                    st.write(f"ID: {failed['article']['id']}")
-                                    st.write(f"Error: {failed['error']}")
-                                    st.write("---")
+                            with st.expander(f"Failed Deletions ({result['failed']})"):
+                                for failed in result['failed_deletions']:
+                                    st.error(f"Article ID: {failed['article_id']} - Error: {failed['error']}")
                         
-                        # Show successful articles summary - UPDATED with URL
+                        # Refresh comparison after deletion
+                        st.info("💡 Run the comparison again to see updated results")
+                    else:
+                        st.error(f"❌ Failed to delete articles: {result}")
+
+    elif 'comparison_result' in st.session_state:
+        st.success("✅ No articles need to be deleted from Ada")
+    else:
+        st.info("👆 Complete Step 2 (Compare Articles) to see articles that need deletion")
+
+    # STEP 4: Add New Articles to Ada
+    st.subheader("➕ Step 2.4: Add New Articles to Ada")
+
+    if 'comparison_result' in st.session_state and st.session_state.comparison_result['articles_to_add']:
+        articles_to_add = st.session_state.comparison_result['articles_to_add']
+        
+        st.info(f"Found {len(articles_to_add)} new articles in Grab that need to be added to Ada")
+        
+        # Show articles to add with selection
+        st.write("**New Articles to Add to Ada:**")
+        
+        # Filter articles_to_add to only include production articles
+        if 'production_articles' in st.session_state:
+            production_ids = set(str(article['id']) for article in st.session_state.production_articles)
+            articles_to_add_filtered = [
+                article for article in articles_to_add 
+                if str(article['id']) in production_ids
+            ]
+        else:
+            articles_to_add_filtered = articles_to_add
+        
+        if len(articles_to_add_filtered) != len(articles_to_add):
+            st.warning(f"Note: {len(articles_to_add) - len(articles_to_add_filtered)} articles were filtered out (testing/empty articles)")
+        
+        # Create selection interface
+        add_selections = {}
+        add_data = []
+        
+        for i, article in enumerate(articles_to_add_filtered):
+            article_id = str(article.get('id', 'Unknown'))
+            name = article.get('name', 'No name')
+            content_length = len(article.get('body', ''))
+            
+            # Create checkbox for each article
+            add_selections[article_id] = st.checkbox(
+                f"Add: {name} ({content_length} chars)",
+                key=f"add_{article_id}",
+                value=True  # Default to selected
+            )
+            
+            add_data.append({
+                'Select': add_selections[article_id],
+                'ID': article_id,
+                'Name': name,
+                'Content Length': content_length,
+                'Content Preview': article.get('body', '')[:100] + "..." if len(article.get('body', '')) > 100 else article.get('body', '')
+            })
+        
+        # Show table of articles to add
+        if add_data:
+            add_df = pd.DataFrame(add_data)
+            st.dataframe(add_df)
+            
+            # Bulk selection options
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Select All for Addition", key="select_all_addition"):
+                    for article_id in add_selections.keys():
+                        st.session_state[f"add_{article_id}"] = True
+                    st.rerun()
+            
+            with col2:
+                if st.button("Deselect All for Addition", key="deselect_all_addition"):
+                    for article_id in add_selections.keys():
+                        st.session_state[f"add_{article_id}"] = False
+                    st.rerun()
+            
+            # Add selected articles
+            selected_for_addition = [
+                article for article in articles_to_add_filtered 
+                if st.session_state.get(f"add_{str(article.get('id'))}", True)
+            ]
+            
+            if selected_for_addition:
+                st.write(f"**{len(selected_for_addition)} articles selected for addition to Ada**")
+                
+                # Preview what will be sent - UPDATED with correct URL pattern
+                if st.checkbox("🔍 Preview articles that will be added to Ada", key="preview_addition"):
+                    if selected_for_addition:
+                        sample_ada_data = convert_to_ada_format(
+                            selected_for_addition[:2], 
+                            st.session_state.user_type, 
+                            st.session_state.language_locale,
+                            comparison_knowledge_source_id,
+                            override_language,
+                            name_prefix
+                        )
+                        st.write("**Preview of data format:**")
+                        st.write(f"**Target Knowledge Source ID:** `{comparison_knowledge_source_id}`")
+                        st.write(f"**Language:** `{override_language or st.session_state.language_locale}`")
+                        if name_prefix:
+                            st.write(f"**Name Prefix:** `{name_prefix}`")
+                        
+                        # Show correct URL pattern based on user type
+                        if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
+                            mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
+                            st.write(f"**Sample URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/12345`")
+                        else:
+                            st.write(f"**Sample URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/12345`")
+                        
+                        st.json(sample_ada_data[0] if sample_ada_data else {})
+                        if len(sample_ada_data) > 1:
+                            st.write(f"... and {len(selected_for_addition)-1} more articles")
+                
+                if st.button("➕ Add Selected Articles to Ada", type="primary", key="add_articles_comparison"):
+                    if not comparison_knowledge_source_id:
+                        st.error("Please ensure Knowledge Source ID is provided")
+                    else:
+                        st.info("🚀 Starting real-time article upload process...")
+                        
+                        success, result = create_articles_individually_with_status(
+                            selected_for_addition,
+                            instance_name,
+                            comparison_knowledge_source_id,
+                            api_key,
+                            st.session_state.user_type,
+                            st.session_state.language_locale,
+                            override_language,
+                            name_prefix
+                        )
+                        
+                        if success:
+                            st.balloons()
+                            
+                            # Final summary
+                            st.subheader("🎉 Upload Complete!")
+                            
+                            if result['successful'] > 0:
+                                st.success(f"✅ Successfully uploaded {result['successful']} articles to Ada!")
+                            
+                            if result['failed'] > 0:
+                                st.error(f"❌ {result['failed']} articles failed to upload")
+                                
+                                # Show failed articles summary
+                                with st.expander(f"Failed Articles Details ({result['failed']})"):
+                                    for failed in result['failed_uploads']:
+                                        st.error(f"**{failed['article']['name']}**")
+                                        st.write(f"ID: {failed['article']['id']}")
+                                        st.write(f"Error: {failed['error']}")
+                                        st.write("---")
+                            
+                            # Show successful articles summary - UPDATED with URL
                             if result['successful'] > 0:
                                 with st.expander(f"Successful Articles Summary ({result['successful']})"):
                                     for successful in result['successful_uploads']:
                                         st.success(f"**{successful['article']['name']}**")
                                         st.write(f"Article ID: {successful['article']['id']}")
                                         st.write(f"Knowledge Source ID: {successful['article']['knowledge_source_id']}")
-                                        st.write(f"URL: {successful['article']['url']}")  # Add URL display
+                                        st.write(f"Language: {successful['article']['language']}")
+                                        st.write(f"URL: {successful['article']['url']}")
                                         st.write("---")
-                        
-                        # Refresh comparison after addition
-                        st.info("💡 Run the comparison again to see updated results")
-                    else:
-                        st.error(f"❌ Failed to upload articles: {result}")
+                            
+                            # Refresh comparison after addition
+                            st.info("💡 Run the comparison again to see updated results")
+                        else:
+                            st.error(f"❌ Failed to upload articles: {result}")
+            else:
+                st.info("No articles selected for addition")
         else:
-            st.info("No articles selected for addition")
+            st.info("No new production articles to add")
+
+    elif 'comparison_result' in st.session_state:
+        st.success("✅ No new articles need to be added to Ada")
     else:
-        st.info("No new production articles to add")
+        st.info("👆 Complete Step 2 (Compare Articles) to see new articles that need to be added")
 
-elif 'comparison_result' in st.session_state:
-    st.success("✅ No new articles need to be added to Ada")
-else:
-    st.info("👆 Complete Step 2 (Compare Articles) to see new articles that need to be added")
-
-# Summary Section
-if 'comparison_result' in st.session_state:
-    st.subheader("📊 Comparison Summary")
-    result = st.session_state.comparison_result
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Grab Articles:**")
-        st.write(f"- Total: {result['grab_total']}")
-        st.write(f"- Unique IDs: {len(result['grab_ids'])}")
-    
-    with col2:
-        st.write("**Ada Articles:**")
-        st.write(f"- Total: {result['ada_total']}")
-        st.write(f"- Unique IDs: {len(result['ada_ids'])}")
-    
-    st.write("**Sync Status:**")
-    st.write(f"- ✅ In Sync: {len(result['articles_existing'])} articles")
-    st.write(f"- 🗑️ To Delete: {len(result['articles_to_delete'])} articles")
-    st.write(f"- ➕ To Add: {len(result['articles_to_add'])} articles")
+    # Summary Section
+    if 'comparison_result' in st.session_state:
+        st.subheader("📊 Comparison Summary")
+        result = st.session_state.comparison_result
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Grab Articles:**")
+            st.write(f"- Total: {result['grab_total']}")
+            st.write(f"- Unique IDs: {len(result['grab_ids'])}")
+        
+        with col2:
+            st.write("**Ada Articles:**")
+            st.write(f"- Total: {result['ada_total']}")
+            st.write(f"- Unique IDs: {len(result['ada_ids'])}")
+        
+        st.write("**Sync Status:**")
+        st.write(f"- ✅ In Sync: {len(result['articles_existing'])} articles")
+        st.write(f"- 🗑️ To Delete: {len(result['articles_to_delete'])} articles")
+        st.write(f"- ➕ To Add: {len(result['articles_to_add'])} articles")
 
 st.divider()
 
-# Download Section
-st.header("📥 Step 3: Download Articles (Optional)")
-
-if 'production_articles' in st.session_state:
-    # Choose which articles to download
-    articles_to_download = st.session_state.production_articles
+# SECTION 3: Download Section (COLLAPSED)
+with st.expander("📥 Step 3: Download Articles (Optional)", expanded=False):
+    st.write("Download articles in various formats for backup or manual processing.")
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("Download Original Format")
+    if 'production_articles' in st.session_state:
+        # Choose which articles to download
+        articles_to_download = st.session_state.production_articles
         
-        # Original JSON format (with cleaned content)
-        original_json = json.dumps(articles_to_download, indent=2)
-        download_label = f"📄 Download {len(articles_to_download)} Articles as JSON"
+        col1, col2 = st.columns(2)
         
-        st.download_button(
-            label=download_label,
-            data=original_json,
-            file_name=f"grab_articles_{st.session_state.user_type}_{st.session_state.language_locale}_cleaned.json",
-            mime="application/json"
-        )
-    
-    with col2:
-        st.subheader("Download Ada Format")
+        with col1:
+            st.subheader("Download Original Format")
+            
+            # Original JSON format (with cleaned content)
+            original_json = json.dumps(articles_to_download, indent=2)
+            download_label = f"📄 Download {len(articles_to_download)} Articles as JSON"
+            
+            st.download_button(
+                label=download_label,
+                data=original_json,
+                file_name=f"grab_articles_{st.session_state.user_type}_{st.session_state.language_locale}_cleaned.json",
+                mime="application/json"
+            )
         
-        # Get knowledge source ID for download preview
-        preview_knowledge_source_id = ""
-        if 'selected_knowledge_source_id' in st.session_state:
-            preview_knowledge_source_id = st.session_state.selected_knowledge_source_id
-        elif 'comparison_source_id' in st.session_state:
-            preview_knowledge_source_id = st.session_state.comparison_source_id
-        else:
-            preview_knowledge_source_id = "your-knowledge-source-id"
-        
-        # Ada format
-        ada_format_data = convert_to_ada_format(
-            articles_to_download, 
-            st.session_state.user_type, 
-            st.session_state.language_locale,
-            preview_knowledge_source_id
-        )
-        ada_json = json.dumps(ada_format_data, indent=2)
-        
-        ada_download_label = f"🔄 Download {len(articles_to_download)} Articles for Ada"
-        
-        st.download_button(
-            label=ada_download_label,
-            data=ada_json,
-            file_name=f"ada_articles_{st.session_state.user_type}_{st.session_state.language_locale}_ready.json",
-            mime="application/json"
-        )
-        
-        # Preview Ada format with knowledge source ID and URL visible
-        if st.checkbox("Preview Ada format"):
-            if ada_format_data:
-                st.write("**Sample Ada format:**")
-                st.write(f"**Knowledge Source ID:** `{preview_knowledge_source_id}`")
-                
-                # Show correct URL pattern based on user type
-                if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
-                    mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
-                    st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
-                else:
-                    st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
-                
-                sample_article = ada_format_data[0]
-                st.json(sample_article)
+        with col2:
+            st.subheader("Download Ada Format")
+            
+            # Get knowledge source ID for download preview
+            preview_knowledge_source_id = ""
+            if 'selected_knowledge_source_id' in st.session_state:
+                preview_knowledge_source_id = st.session_state.selected_knowledge_source_id
+            elif 'comparison_source_id' in st.session_state:
+                preview_knowledge_source_id = st.session_state.comparison_source_id
+            else:
+                preview_knowledge_source_id = "your-knowledge-source-id"
+            
+            # Ada format
+            ada_format_data = convert_to_ada_format(
+                articles_to_download, 
+                st.session_state.user_type, 
+                st.session_state.language_locale,
+                preview_knowledge_source_id,
+                override_language,
+                name_prefix
+            )
+            ada_json = json.dumps(ada_format_data, indent=2)
+            
+            ada_download_label = f"🔄 Download {len(articles_to_download)} Articles for Ada"
+            
+            st.download_button(
+                label=ada_download_label,
+                data=ada_json,
+                file_name=f"ada_articles_{st.session_state.user_type}_{st.session_state.language_locale}_ready.json",
+                mime="application/json"
+            )
+            
+            # Preview Ada format with knowledge source ID and URL visible
+            if st.checkbox("Preview Ada format", key="download_preview"):
+                if ada_format_data:
+                    st.write("**Sample Ada format:**")
+                    st.write(f"**Knowledge Source ID:** `{preview_knowledge_source_id}`")
+                    st.write(f"**Language:** `{override_language or st.session_state.language_locale}`")
+                    if name_prefix:
+                        st.write(f"**Name Prefix:** `{name_prefix}`")
+                    
+                    # Show correct URL pattern based on user type
+                    if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
+                        mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
+                        st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/12345`")
+                    else:
+                        st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/12345`")
+                    
+                    sample_article = ada_format_data[0]
+                    st.json(sample_article)
 
-    # Option to download filtered articles separately
-    if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
-        st.subheader("Download Filtered Articles (Optional)")
-        st.write(f"Found {len(st.session_state.filtered_articles)} filtered articles")
-        
-        filtered_json = json.dumps(st.session_state.filtered_articles, indent=2)
-        st.download_button(
-            label=f"🚫 Download {len(st.session_state.filtered_articles)} Filtered Articles",
-            data=filtered_json,
-            file_name=f"grab_filtered_articles_{st.session_state.user_type}_{st.session_state.language_locale}.json",
-            mime="application/json"
-        )
+        # Option to download filtered articles separately
+        if 'filtered_articles' in st.session_state and st.session_state.filtered_articles:
+            st.subheader("Download Filtered Articles (Optional)")
+            st.write(f"Found {len(st.session_state.filtered_articles)} filtered articles")
+            
+            filtered_json = json.dumps(st.session_state.filtered_articles, indent=2)
+            st.download_button(
+                label=f"🚫 Download {len(st.session_state.filtered_articles)} Filtered Articles",
+                data=filtered_json,
+                file_name=f"grab_filtered_articles_{st.session_state.user_type}_{st.session_state.language_locale}.json",
+                mime="application/json"
+            )
 
-else:
-    st.info("👆 Please fetch articles first to enable download options")
+    else:
+        st.info("👆 Please fetch articles first to enable download options")
 
 st.divider()
 
@@ -2033,6 +2105,25 @@ if 'production_articles' in st.session_state:
     if default_upload_id:
         st.info("💡 Knowledge Source ID auto-filled from your selection above")
     
+    # Show current configuration summary
+    st.subheader("🔧 Upload Configuration")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Language Settings:**")
+        if override_language_enabled and override_language:
+            st.write(f"🔄 Custom language: `{override_language}`")
+        else:
+            st.write(f"📍 Grab's language: `{language_locale}`")
+    
+    with col2:
+        st.write("**Name Settings:**")
+        if name_prefix_enabled and name_prefix:
+            st.write(f"🏷️ Prefix: `{name_prefix}`")
+            st.write(f"Example: `{name_prefix}How to book a ride`")
+        else:
+            st.write("📝 No prefix (original names)")
+    
     # Preview what will be sent - UPDATED with correct URL pattern
     if st.checkbox("🔍 Preview data that will be sent to Ada"):
         if articles_to_upload and knowledge_source_id:
@@ -2040,18 +2131,23 @@ if 'production_articles' in st.session_state:
                 articles_to_upload[:2], 
                 st.session_state.user_type, 
                 st.session_state.language_locale,
-                knowledge_source_id
+                knowledge_source_id,
+                override_language,
+                name_prefix
             )
             st.write("**Preview of data that will be sent to Ada:**")
             st.write(f"**Target Knowledge Source ID:** `{knowledge_source_id}`")
             st.write(f"**Total Articles to Upload:** {len(articles_to_upload)}")
+            st.write(f"**Language:** `{override_language or language_locale}`")
+            if name_prefix:
+                st.write(f"**Name Prefix:** `{name_prefix}`")
             
             # Show correct URL pattern based on user type
             if st.session_state.user_type in ['moveitpassenger', 'moveitdriver']:
                 mapped_type = 'passenger' if st.session_state.user_type == 'moveitpassenger' else 'driver'
-                st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/{{article_id}}`")
+                st.write(f"**URL Pattern:** `https://help.moveit.com.ph/{mapped_type}/{st.session_state.language_locale}/12345`")
             else:
-                st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/{{article_id}}`")
+                st.write(f"**URL Pattern:** `https://help.grab.com/{st.session_state.user_type}/{st.session_state.language_locale}/12345`")
             
             if sample_ada_data:
                 st.write("**Sample Article Structure:**")
@@ -2067,6 +2163,7 @@ if 'production_articles' in st.session_state:
                         'Name': article['name'][:50] + "..." if len(article['name']) > 50 else article['name'],
                         'Content Length': len(article['content']),
                         'Knowledge Source ID': article['knowledge_source_id'],
+                        'Language': article['language'],
                         'URL': article['url']
                     })
                 
@@ -2088,6 +2185,10 @@ if 'production_articles' in st.session_state:
         else:
             st.header("🔄 Real-Time Upload Progress")
             st.write(f"Uploading {len(articles_to_upload)} articles to Knowledge Source: `{knowledge_source_id}`")
+            if override_language:
+                st.write(f"Using custom language: `{override_language}`")
+            if name_prefix:
+                st.write(f"Using name prefix: `{name_prefix}`")
             st.write("---")
             
             success, result = create_articles_individually_with_status(
@@ -2096,7 +2197,9 @@ if 'production_articles' in st.session_state:
                 knowledge_source_id, 
                 api_key,
                 st.session_state.user_type,
-                st.session_state.language_locale
+                st.session_state.language_locale,
+                override_language,
+                name_prefix
             )
             
             if success:
@@ -2117,6 +2220,13 @@ if 'production_articles' in st.session_state:
                 with col4:
                     st.metric("⏱️ Total Time", f"{result.get('total_time', 0):.1f}s")
                 
+                # Configuration summary
+                st.write("**Upload Configuration Used:**")
+                st.write(f"- Language: `{override_language or language_locale}`")
+                if name_prefix:
+                    st.write(f"- Name Prefix: `{name_prefix}`")
+                st.write(f"- Knowledge Source: `{knowledge_source_id}`")
+                
                 # Detailed results
                 if result['successful'] > 0:
                     st.success(f"✅ Successfully uploaded {result['successful']} articles to Ada!")
@@ -2128,7 +2238,9 @@ if 'production_articles' in st.session_state:
                                 'Article ID': successful['article']['id'],
                                 'Name': successful['article']['name'],
                                 'Knowledge Source ID': successful['article']['knowledge_source_id'],
-                                'Content Length': len(successful['article']['content'])
+                                'Language': successful['article']['language'],
+                                'Content Length': len(successful['article']['content']),
+                                'URL': successful['article']['url']
                             })
                         
                         if success_data:
@@ -2147,8 +2259,8 @@ if 'production_articles' in st.session_state:
                 
                 # Next steps
                 st.info("💡 **Next Steps:**")
-                st.write("- Use the comparison tool to verify all articles were uploaded correctly")
-                st.write("- Check the API call log for detailed operation history")
+                st.write("- Use the comparison tool in Step 2 to verify all articles were uploaded correctly")
+                st.write("- Check the API call log below for detailed operation history")
                 
             else:
                 st.error(f"❌ Failed to upload articles: {result}")
@@ -2337,6 +2449,8 @@ with col2:
     st.markdown("**Key Features:**")
     st.markdown("• Real-time upload status")
     st.markdown("• Individual article tracking")
+    st.markdown("• Language override options")
+    st.markdown("• Name prefix customization")
     st.markdown("• Comprehensive error handling")
     st.markdown("• Knowledge source management")
 
@@ -2345,8 +2459,10 @@ with col3:
     st.markdown("💡 Monitor real-time status")
     st.markdown("🔄 Test connections first")
     st.markdown("📋 Review previews before upload")
+    st.markdown("🌐 Check language settings")
+    st.markdown("🏷️ Use name prefixes for organization")
     st.markdown("📊 Check logs for troubleshooting")
 
 # Version info
 st.markdown("---")
-st.markdown("*Version 3.0 - Individual uploads with real-time status tracking and enhanced user experience*")
+st.markdown("*Version 3.1 - Enhanced with language override and name prefix options, improved UI organization*")
