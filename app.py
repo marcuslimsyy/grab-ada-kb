@@ -16,10 +16,6 @@ import time
 # Set page title
 st.title("Grab Articles to Ada Knowledge Base Manager")
 
-# Create API keys directory
-API_KEYS_DIR = Path.home() / ".grab_ada_app" / "api_keys"
-API_KEYS_DIR.mkdir(parents=True, exist_ok=True)
-
 # Initialize API call log in session state
 if 'api_call_log' not in st.session_state:
     st.session_state.api_call_log = []
@@ -41,59 +37,6 @@ def log_api_call(method, url, status_code, success, details="", response_data=No
     # Keep only last 50 entries to prevent memory issues
     if len(st.session_state.api_call_log) > 50:
         st.session_state.api_call_log = st.session_state.api_call_log[-50:]
-
-def save_api_config(config_name, instance_name, api_key):
-    """Save API configuration to JSON file"""
-    config_data = {
-        "instance_name": instance_name,
-        "api_key": api_key,
-        "created_date": str(pd.Timestamp.now())
-    }
-    
-    config_file = API_KEYS_DIR / f"{config_name}.json"
-    
-    with open(config_file, 'w') as f:
-        json.dump(config_data, f, indent=2)
-    
-    return True
-
-def load_api_config(config_name):
-    """Load API configuration from JSON file"""
-    try:
-        config_file = API_KEYS_DIR / f"{config_name}.json"
-        
-        if not config_file.exists():
-            return None
-        
-        with open(config_file, 'r') as f:
-            return json.load(f)
-    except Exception as e:
-        st.sidebar.error(f"Error loading config: {e}")
-        return None
-
-def list_saved_configs():
-    """List all saved API configurations"""
-    configs = []
-    for file in API_KEYS_DIR.glob("*.json"):
-        config_name = file.stem
-        config_data = load_api_config(config_name)
-        if config_data:
-            instance_name = config_data.get("instance_name", "Unknown")
-            created_date = config_data.get("created_date", "Unknown")
-            configs.append({
-                "name": config_name,
-                "instance": instance_name,
-                "created": created_date
-            })
-    return sorted(configs, key=lambda x: x["name"])
-
-def delete_api_config(config_name):
-    """Delete a saved API configuration"""
-    config_file = API_KEYS_DIR / f"{config_name}.json"
-    if config_file.exists():
-        config_file.unlink()
-        return True
-    return False
 
 def validate_ada_connection(instance_name, api_key):
     """Validate Ada API connection by testing the knowledge sources endpoint"""
@@ -164,42 +107,6 @@ def clean_html_to_markdown(html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
         return soup.get_text().strip()
 
-def is_testing_article(article):
-    """Detect if an article is a testing article"""
-    test_keywords = [
-        'test', 'testing', 'qa', 'quality assurance', 'dummy', 'sample',
-        'lorem ipsum', 'placeholder', 'debug', 'dev', 'development',
-        'staging', 'temp', 'temporary', 'draft', 'wip', 'work in progress',
-        'do not publish', 'internal', 'beta', 'alpha', 'experiment',
-        'trial', 'demo', 'example', 'mock', 'fake', 'zzz', 'xxx',
-        'asdf', 'qwerty', '123test', 'test123', 'testtest'
-    ]
-    
-    article_id = str(article.get('id', ''))
-    article_name = str(article.get('name', '')).lower()
-    article_body = str(article.get('body', '')).lower()
-    
-    # Check keywords in title
-    for keyword in test_keywords:
-        if keyword in article_name:
-            return True, f"Contains test-related word '{keyword}' in the title"
-    
-    # Check keywords in body
-    body_preview = article_body[:200]
-    for keyword in test_keywords:
-        if keyword in body_preview:
-            return True, f"Contains test-related word '{keyword}' in the article content"
-    
-    # Check ID patterns
-    if re.search(r'test\d+', article_id, re.IGNORECASE):
-        return True, "Article ID follows test pattern"
-    
-    # Check content length
-    if len(article_body.strip()) < 10:
-        return True, "Article has very little content"
-    
-    return False, ""
-
 def is_empty_article(article):
     """Check if an article has empty or minimal content"""
     content = article.get('body', '')
@@ -265,9 +172,9 @@ def extract_articles(data):
     
     return articles
 
-def filter_articles(articles, filter_testing=True, filter_empty=True):
-    """Filter out testing and/or empty articles"""
-    if not filter_testing and not filter_empty:
+def filter_articles(articles, filter_empty=True):
+    """Filter out empty articles"""
+    if not filter_empty:
         return articles, [], []
     
     production_articles = []
@@ -275,27 +182,20 @@ def filter_articles(articles, filter_testing=True, filter_empty=True):
     analysis_results = []
     
     for article in articles:
-        is_test = False
         is_empty = False
         reasons = []
-        
-        if filter_testing:
-            is_test, test_reason = is_testing_article(article)
-            if is_test:
-                reasons.append(f"Testing: {test_reason}")
         
         if filter_empty:
             is_empty, empty_reason = is_empty_article(article)
             if is_empty:
                 reasons.append(f"Empty: {empty_reason}")
         
-        should_filter = (filter_testing and is_test) or (filter_empty and is_empty)
+        should_filter = filter_empty and is_empty
         
         analysis_results.append({
             'id': article['id'],
             'name': article['name'],
             'is_filtered': should_filter,
-            'is_testing': is_test,
             'is_empty': is_empty,
             'reasons': reasons,
             'article': article
@@ -307,6 +207,133 @@ def filter_articles(articles, filter_testing=True, filter_empty=True):
             production_articles.append(article)
     
     return production_articles, filtered_articles, analysis_results
+
+def fetch_all_ada_articles(instance_name, api_key, knowledge_source_id):
+    """Fetch all articles from Ada knowledge base with pagination"""
+    if not all([instance_name, api_key, knowledge_source_id]):
+        return False, "Missing required parameters"
+    
+    all_articles = []
+    page = 1
+    has_more = True
+    
+    while has_more:
+        url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        params = {
+            "knowledge_source_id": knowledge_source_id,
+            "page": page
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            
+            log_api_call(
+                method="GET",
+                url=f"{url}?knowledge_source_id={knowledge_source_id}&page={page}",
+                status_code=response.status_code,
+                success=response.status_code == 200,
+                details=f"Fetch Ada articles page {page}"
+            )
+            
+            if response.status_code != 200:
+                return False, f"HTTP {response.status_code}: {response.text}"
+            
+            data = response.json()
+            articles = data.get('data', [])
+            
+            if not articles:
+                has_more = False
+            else:
+                all_articles.extend(articles)
+                page += 1
+            
+            # Check if there's pagination info
+            meta = data.get('meta', {})
+            if 'has_next' in meta:
+                has_more = meta['has_next']
+            elif len(articles) == 0:
+                has_more = False
+                
+        except requests.exceptions.RequestException as e:
+            log_api_call(
+                method="GET",
+                url=f"{url}?knowledge_source_id={knowledge_source_id}&page={page}",
+                status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
+                success=False,
+                details=f"Error fetching Ada articles page {page}: {str(e)}"
+            )
+            return False, f"Error fetching articles: {str(e)}"
+    
+    return True, all_articles
+
+def delete_ada_article(instance_name, api_key, article_id):
+    """Delete a single article from Ada knowledge base"""
+    if not all([instance_name, api_key, article_id]):
+        return False, "Missing required parameters"
+    
+    url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    
+    params = {
+        "id": article_id
+    }
+    
+    try:
+        response = requests.delete(url, headers=headers, params=params, timeout=30)
+        
+        log_api_call(
+            method="DELETE",
+            url=f"{url}?id={article_id}",
+            status_code=response.status_code,
+            success=response.status_code in [200, 204],
+            details=f"Delete Ada article ID: {article_id}"
+        )
+        
+        if response.status_code in [200, 204]:
+            return True, "Article deleted successfully"
+        else:
+            return False, f"HTTP {response.status_code}: {response.text}"
+            
+    except requests.exceptions.RequestException as e:
+        log_api_call(
+            method="DELETE",
+            url=f"{url}?id={article_id}",
+            status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
+            success=False,
+            details=f"Error deleting Ada article {article_id}: {str(e)}"
+        )
+        return False, f"Error deleting article: {str(e)}"
+
+def compare_articles(grab_articles, ada_articles):
+    """Compare Grab articles with Ada articles"""
+    grab_ids = set(str(article['id']) for article in grab_articles)
+    ada_ids = set(str(article.get('id', '')) for article in ada_articles)
+    
+    # Articles in both
+    existing_ids = grab_ids.intersection(ada_ids)
+    existing_articles = [article for article in grab_articles if str(article['id']) in existing_ids]
+    
+    # New articles (in Grab but not in Ada)
+    new_ids = grab_ids - ada_ids
+    new_articles = [article for article in grab_articles if str(article['id']) in new_ids]
+    
+    # Missing articles (in Ada but not in current Grab scrape)
+    missing_ids = ada_ids - grab_ids
+    missing_articles = [article for article in ada_articles if str(article.get('id', '')) in missing_ids]
+    
+    return {
+        'existing': existing_articles,
+        'new': new_articles,
+        'missing': missing_articles
+    }
 
 def convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id, override_language=None, name_prefix=None, id_prefix=None):
     """Convert articles to Ada JSON format"""
@@ -336,13 +363,17 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
         if id_prefix:
             article_id = f"{id_prefix}{article_id}"
         
+        # Generate current timestamp in required format
+        external_updated = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        
         ada_article = {
             "id": article_id,
             "name": article_name,
             "content": article['body'] or "",
             "knowledge_source_id": knowledge_source_id,
             "url": article_url,
-            "language": language_to_use
+            "language": language_to_use,
+            "external_updated": external_updated
         }
         ada_articles.append(ada_article)
     
@@ -611,83 +642,18 @@ def list_ada_knowledge_sources(instance_name, api_key):
 # Sidebar Configuration
 st.sidebar.header("Configuration")
 
-# API Key Management
-st.sidebar.subheader("🔐 API Key Management")
-saved_configs = list_saved_configs()
+# Simple Ada API Configuration
+st.sidebar.subheader("🔐 Ada API Configuration")
+instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
+api_key = st.sidebar.text_input("API Key:", type="password")
 
-config_mode = st.sidebar.radio(
-    "Configuration Mode:",
-    ["Use Saved Config", "Enter Manually", "Save New Config"]
-)
-
-instance_name = ""
-api_key = ""
-
-if config_mode == "Use Saved Config":
-    if saved_configs:
-        config_options = [f"{config['name']} ({config['instance']})" for config in saved_configs]
-        config_names = [config['name'] for config in saved_configs]
-        
-        selected_display = st.sidebar.selectbox(
-            "Select Saved Configuration:",
-            config_options
-        )
-        
-        if selected_display:
-            selected_index = config_options.index(selected_display)
-            selected_config = config_names[selected_index]
-            
-            config_data = load_api_config(selected_config)
-            if config_data:
-                instance_name = config_data.get("instance_name", "")
-                api_key = config_data.get("api_key", "")
-                
-                st.sidebar.success(f"✅ Loaded: {selected_config}")
-                st.sidebar.write(f"**Instance:** {instance_name}")
-                
-                if st.sidebar.button("🔄 Test Connection"):
-                    with st.sidebar.spinner("Testing connection..."):
-                        success, message = validate_ada_connection(instance_name, api_key)
-                        if success:
-                            st.sidebar.success(f"✅ {message}")
-                        else:
-                            st.sidebar.error(f"❌ {message}")
-        
-        if saved_configs and st.sidebar.button("🗑️ Delete Selected Config"):
-            if delete_api_config(selected_config):
-                st.sidebar.success(f"Deleted: {selected_config}")
-                st.rerun()
-    else:
-        st.sidebar.info("No saved configurations found")
-
-elif config_mode == "Enter Manually":
-    instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
-    api_key = st.sidebar.text_input("API Key:", type="password")
-    
-    if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
-        with st.sidebar.spinner("Testing connection..."):
-            success, message = validate_ada_connection(instance_name, api_key)
-            if success:
-                st.sidebar.success(f"✅ {message}")
-            else:
-                st.sidebar.error(f"❌ {message}")
-
-elif config_mode == "Save New Config":
-    new_config_name = st.sidebar.text_input("Configuration Name:")
-    new_instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
-    new_api_key = st.sidebar.text_input("API Key:", type="password")
-    
-    if st.sidebar.button("💾 Save Configuration"):
-        if all([new_config_name, new_instance_name, new_api_key]):
-            existing_names = [config['name'] for config in saved_configs]
-            if new_config_name in existing_names:
-                st.sidebar.error(f"Configuration '{new_config_name}' already exists!")
-            else:
-                if save_api_config(new_config_name, new_instance_name, new_api_key):
-                    st.sidebar.success(f"✅ Saved: {new_config_name}")
-                    st.rerun()
+if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
+    with st.sidebar.spinner("Testing connection..."):
+        success, message = validate_ada_connection(instance_name, api_key)
+        if success:
+            st.sidebar.success(f"✅ {message}")
         else:
-            st.sidebar.error("Please fill in all fields")
+            st.sidebar.error(f"❌ {message}")
 
 # Show current configuration status
 if instance_name and api_key:
@@ -709,7 +675,6 @@ language_locale = st.sidebar.text_input(
 
 # Article filtering options
 st.sidebar.subheader("Article Filters")
-filter_testing = st.sidebar.checkbox("Filter out testing articles", value=True)
 filter_empty = st.sidebar.checkbox("Filter out empty articles", value=True)
 
 # Ada Payload Options
@@ -815,7 +780,7 @@ if st.button("🔄 Fetch Articles from Grab", type="primary"):
             
             if all_articles:
                 production_articles, filtered_articles, analysis = filter_articles(
-                    all_articles, filter_testing, filter_empty
+                    all_articles, filter_empty
                 )
                 
                 st.session_state.all_articles = all_articles
@@ -856,21 +821,176 @@ if st.button("🔄 Fetch Articles from Grab", type="primary"):
 
 if 'production_articles' in st.session_state:
     articles_to_use = st.session_state.production_articles
-    st.info(f"📋 {len(articles_to_use)} articles ready for upload to Ada")
+    st.info(f"📋 {len(articles_to_use)} articles ready for comparison and upload to Ada")
+
+st.divider()
+
+# Article Comparison Section
+st.header("🔍 Compare with Ada Knowledge Base")
+
+if 'production_articles' in st.session_state:
+    comparison_knowledge_source_id = st.text_input(
+        "Knowledge Source ID for Comparison:",
+        value=st.session_state.get('selected_knowledge_source_id', ''),
+        help="Enter the ID of the knowledge source to compare with"
+    )
+    
+    if st.button("🔍 Compare Articles", type="secondary"):
+        if not all([instance_name, api_key]):
+            st.error("Please configure Ada API settings first")
+        elif not comparison_knowledge_source_id:
+            st.error("Please enter a Knowledge Source ID for comparison")
+        else:
+            with st.spinner("Fetching articles from Ada knowledge base..."):
+                success, ada_articles = fetch_all_ada_articles(instance_name, api_key, comparison_knowledge_source_id)
+                
+                if success:
+                    st.success(f"✅ Fetched {len(ada_articles)} articles from Ada")
+                    
+                    # Perform comparison
+                    grab_articles = st.session_state.production_articles
+                    comparison = compare_articles(grab_articles, ada_articles)
+                    
+                    # Store comparison results
+                    st.session_state.comparison_results = comparison
+                    st.session_state.comparison_knowledge_source_id = comparison_knowledge_source_id
+                    
+                    # Display comparison results
+                    st.subheader("📊 Comparison Results")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("✅ Already in Ada", len(comparison['existing']))
+                    with col2:
+                        st.metric("🆕 New Articles", len(comparison['new']))
+                    with col3:
+                        st.metric("❌ Missing/Orphaned", len(comparison['missing']))
+                    
+                    # Show details in expandable sections
+                    with st.expander(f"✅ Already in Ada ({len(comparison['existing'])})"):
+                        if comparison['existing']:
+                            existing_df = pd.DataFrame([{
+                                'ID': article['id'],
+                                'Name': article['name'],
+                                'Content Length': len(article['body'])
+                            } for article in comparison['existing']])
+                            st.dataframe(existing_df)
+                        else:
+                            st.info("No existing articles found")
+                    
+                    with st.expander(f"🆕 New Articles to Upload ({len(comparison['new'])})"):
+                        if comparison['new']:
+                            new_df = pd.DataFrame([{
+                                'ID': article['id'],
+                                'Name': article['name'],
+                                'Content Length': len(article['body'])
+                            } for article in comparison['new']])
+                            st.dataframe(new_df)
+                            st.session_state.articles_to_upload = comparison['new']
+                        else:
+                            st.info("No new articles to upload")
+                    
+                    with st.expander(f"❌ Missing/Orphaned Articles ({len(comparison['missing'])})"):
+                        if comparison['missing']:
+                            missing_df = pd.DataFrame([{
+                                'ID': article.get('id', 'Unknown'),
+                                'Name': article.get('name', 'Unknown'),
+                                'Language': article.get('language', 'Unknown')
+                            } for article in comparison['missing']])
+                            st.dataframe(missing_df)
+                            
+                            # Delete missing articles section
+                            st.subheader("🗑️ Delete Missing Articles")
+                            st.warning("These articles exist in Ada but not in the current Grab scrape. They may be outdated.")
+                            
+                            # Create checkboxes for each missing article (all checked by default)
+                            articles_to_delete = []
+                            for i, article in enumerate(comparison['missing']):
+                                article_name = article.get('name', 'Unknown')
+                                article_id = article.get('id', 'Unknown')
+                                
+                                # All checkboxes checked by default
+                                if st.checkbox(
+                                    f"Delete: {article_name} (ID: {article_id})", 
+                                    value=True, 
+                                    key=f"delete_{i}"
+                                ):
+                                    articles_to_delete.append(article)
+                            
+                            if articles_to_delete and st.button("🗑️ Delete Selected Articles", type="secondary"):
+                                st.subheader("🔄 Deleting Articles")
+                                
+                                delete_progress = st.progress(0)
+                                delete_status = st.empty()
+                                
+                                successful_deletes = 0
+                                failed_deletes = 0
+                                
+                                for i, article in enumerate(articles_to_delete):
+                                    progress = (i + 1) / len(articles_to_delete)
+                                    delete_progress.progress(progress)
+                                    
+                                    article_name = article.get('name', 'Unknown')
+                                    article_id = article.get('id', 'Unknown')
+                                    
+                                    with delete_status:
+                                        st.write(f"🗑️ Deleting {i+1}/{len(articles_to_delete)}: {article_name}")
+                                    
+                                    success, message = delete_ada_article(instance_name, api_key, article_id)
+                                    
+                                    if success:
+                                        successful_deletes += 1
+                                        st.success(f"✅ Deleted: {article_name}")
+                                    else:
+                                        failed_deletes += 1
+                                        st.error(f"❌ Failed to delete {article_name}: {message}")
+                                    
+                                    time.sleep(0.1)  # Small delay to prevent overwhelming the API
+                                
+                                delete_progress.progress(1.0)
+                                
+                                with delete_status:
+                                    st.write("🎉 Deletion process completed!")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("✅ Successfully Deleted", successful_deletes)
+                                with col2:
+                                    st.metric("❌ Failed to Delete", failed_deletes)
+                        else:
+                            st.info("No missing/orphaned articles found")
+                
+                else:
+                    st.error(f"❌ Failed to fetch Ada articles: {ada_articles}")
+else:
+    st.info("👆 Please fetch articles from Grab first before comparing")
 
 st.divider()
 
 # Upload to Ada
 st.header("📤 Upload Articles to Ada")
 
-if 'production_articles' in st.session_state:
+# Determine which articles to upload
+articles_to_upload = None
+if 'comparison_results' in st.session_state:
+    # Use new articles from comparison
+    articles_to_upload = st.session_state.comparison_results['new']
+    upload_source = "comparison"
+    st.info(f"📋 {len(articles_to_upload)} new articles ready for upload (from comparison)")
+elif 'production_articles' in st.session_state:
+    # Use all production articles
     articles_to_upload = st.session_state.production_articles
-    
+    upload_source = "all"
+    st.info(f"📋 {len(articles_to_upload)} articles ready for upload (all production articles)")
+
+if articles_to_upload:
     st.write(f"**Ready to upload {len(articles_to_upload)} articles to Ada**")
     
     # Auto-populate knowledge source ID
     default_upload_id = ""
-    if 'selected_knowledge_source_id' in st.session_state:
+    if 'comparison_knowledge_source_id' in st.session_state:
+        default_upload_id = st.session_state.comparison_knowledge_source_id
+    elif 'selected_knowledge_source_id' in st.session_state:
         default_upload_id = st.session_state.selected_knowledge_source_id
     
     knowledge_source_id = st.text_input(
@@ -932,7 +1052,8 @@ if 'production_articles' in st.session_state:
                         'Name': article['name'][:50] + "..." if len(article['name']) > 50 else article['name'],
                         'Content Length': len(article['content']),
                         'Language': article['language'],
-                        'URL': article['url']
+                        'URL': article['url'],
+                        'External Updated': article['external_updated']
                     })
                 
                 preview_df = pd.DataFrame(preview_summary)
@@ -1087,10 +1208,12 @@ with col1:
 with col2:
     st.markdown("**Key Features:**")
     st.markdown("• Real-time upload status")
+    st.markdown("• Article comparison with Ada KB")
+    st.markdown("• Automatic orphaned article cleanup")
     st.markdown("• Language override options")
     st.markdown("• Name & ID prefix customization")
     st.markdown("• Knowledge source management")
-    st.markdown("• Comprehensive error handling")
+    st.markdown("• External update timestamp")
 
 st.markdown("---")
-st.markdown("*Version 3.2 - Clean UI with ID prefix functionality*")
+st.markdown("*Version 4.0 - With comparison and cleanup features*")
