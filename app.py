@@ -762,7 +762,7 @@ if 'production_articles' in st.session_state:
 
 st.divider()
 
-# Article Comparison Section with Live Logging
+# Article Comparison Section with Fixed Pagination
 st.header("🔍 Compare with Ada Knowledge Base")
 
 if 'production_articles' in st.session_state:
@@ -793,15 +793,15 @@ if 'production_articles' in st.session_state:
             
             all_ada_articles = []
             page = 1
-            has_more = True
             total_fetched = 0
+            max_pages = 100  # Safety limit to prevent infinite loops
             
             with fetch_container:
                 st.subheader("📡 Fetching Ada Articles")
                 page_status = st.empty()
                 articles_status = st.empty()
             
-            while has_more:
+            while page <= max_pages:  # Safety limit
                 url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
                 headers = {
                     "Authorization": f"Bearer {api_key}",
@@ -838,27 +838,50 @@ if 'production_articles' in st.session_state:
                     data = response.json()
                     articles = data.get('data', [])
                     
-                    if not articles:
-                        has_more = False
+                    # Check if we have articles
+                    if not articles or len(articles) == 0:
                         with page_status:
-                            st.info("✅ **No more articles found - fetch complete**")
-                    else:
-                        all_ada_articles.extend(articles)
-                        total_fetched += len(articles)
-                        page += 1
-                        
-                        with page_status:
-                            st.success(f"✅ **Page {page-1} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
-                        
-                        with articles_status:
-                            st.metric("📊 Total Articles Fetched", total_fetched)
+                            st.info(f"✅ **Page {page} returned no articles - fetch complete**")
+                        break
                     
-                    # Check if there's pagination info
+                    # Add articles to our collection
+                    all_ada_articles.extend(articles)
+                    total_fetched += len(articles)
+                    
+                    with page_status:
+                        st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
+                    
+                    with articles_status:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("📊 Total Articles Fetched", total_fetched)
+                        with col2:
+                            st.metric("📄 Pages Processed", page)
+                    
+                    # Check pagination metadata if available
                     meta = data.get('meta', {})
-                    if 'has_next' in meta:
-                        has_more = meta['has_next']
-                    elif len(articles) == 0:
-                        has_more = False
+                    pagination = data.get('pagination', {})
+                    
+                    # Different ways APIs might indicate no more pages
+                    if 'has_next' in meta and not meta['has_next']:
+                        with page_status:
+                            st.info(f"✅ **Pagination metadata indicates no more pages - fetch complete**")
+                        break
+                    elif 'has_next_page' in pagination and not pagination['has_next_page']:
+                        with page_status:
+                            st.info(f"✅ **Pagination metadata indicates no more pages - fetch complete**")
+                        break
+                    elif 'total_pages' in pagination and page >= pagination['total_pages']:
+                        with page_status:
+                            st.info(f"✅ **Reached total pages ({pagination['total_pages']}) - fetch complete**")
+                        break
+                    elif len(articles) < 20:  # Assuming default page size is 20 or more
+                        with page_status:
+                            st.info(f"✅ **Received fewer articles ({len(articles)}) than expected - likely last page**")
+                        break
+                    
+                    page += 1
+                    time.sleep(0.1)  # Small delay to show progress
                         
                 except requests.exceptions.RequestException as e:
                     log_api_call(
@@ -873,8 +896,12 @@ if 'production_articles' in st.session_state:
                         st.error(f"❌ **Error fetching page {page}:** {str(e)}")
                     st.error(f"Error fetching articles from Ada: {str(e)}")
                     break
-                
-                time.sleep(0.1)  # Small delay to show progress
+            
+            # Check if we hit the safety limit
+            if page > max_pages:
+                with page_status:
+                    st.warning(f"⚠️ **Stopped at safety limit of {max_pages} pages**")
+                st.warning(f"Reached safety limit of {max_pages} pages. You may want to check the pagination logic.")
             
             if all_ada_articles:
                 with main_status:
@@ -1321,4 +1348,4 @@ with col2:
     st.markdown("• External update timestamp")
 
 st.markdown("---")
-st.markdown("*Version 4.1 - With live comparison logging*")
+st.markdown("*Version 4.2 - With fixed pagination logic*")
