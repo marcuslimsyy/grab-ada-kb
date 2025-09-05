@@ -762,7 +762,7 @@ if 'production_articles' in st.session_state:
 
 st.divider()
 
-# Article Comparison Section with Fixed Pagination
+# Article Comparison Section with Max 20 Pages
 st.header("🔍 Compare with Ada Knowledge Base")
 
 if 'production_articles' in st.session_state:
@@ -794,14 +794,16 @@ if 'production_articles' in st.session_state:
             all_ada_articles = []
             page = 1
             total_fetched = 0
+            MAX_PAGES = 20  # Hard limit to prevent infinite loops
             
             with fetch_container:
                 st.subheader("📡 Fetching Ada Articles")
+                st.info(f"⚠️ **Maximum {MAX_PAGES} pages will be fetched to prevent infinite loops**")
                 page_status = st.empty()
                 articles_status = st.empty()
             
-            # Simple pagination loop - stop when no articles returned
-            while True:
+            # Pagination with hard limit
+            while page <= MAX_PAGES:
                 url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
                 headers = {
                     "Authorization": f"Bearer {api_key}",
@@ -814,7 +816,7 @@ if 'production_articles' in st.session_state:
                 }
                 
                 with page_status:
-                    st.write(f"🔄 **Fetching page {page}...**")
+                    st.write(f"🔄 **Fetching page {page}/{MAX_PAGES}...**")
                 
                 try:
                     start_time = time.time()
@@ -838,7 +840,7 @@ if 'production_articles' in st.session_state:
                     data = response.json()
                     articles = data.get('data', [])
                     
-                    # STOP IMMEDIATELY if no articles in response
+                    # Stop if no articles in response
                     if not articles:
                         with page_status:
                             st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
@@ -852,11 +854,13 @@ if 'production_articles' in st.session_state:
                         st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
                     
                     with articles_status:
-                        col1, col2 = st.columns(2)
+                        col1, col2, col3 = st.columns(3)
                         with col1:
                             st.metric("📊 Total Articles Fetched", total_fetched)
                         with col2:
-                            st.metric("📄 Pages Processed", page)
+                            st.metric("📄 Current Page", page)
+                        with col3:
+                            st.metric("📋 Remaining Pages", MAX_PAGES - page)
                     
                     # Move to next page
                     page += 1
@@ -877,8 +881,12 @@ if 'production_articles' in st.session_state:
                     break
             
             # Show final fetch summary
-            with page_status:
-                st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
+            if page > MAX_PAGES:
+                with page_status:
+                    st.warning(f"🛑 **Stopped at maximum limit of {MAX_PAGES} pages. Fetched {total_fetched} articles.**")
+            else:
+                with page_status:
+                    st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
             
             if all_ada_articles:
                 with main_status:
@@ -934,7 +942,7 @@ if 'production_articles' in st.session_state:
                 with perf_col2:
                     st.metric("📄 Grab Articles Analyzed", len(grab_articles))
                 with perf_col3:
-                    st.metric("📊 Pages Fetched", page - 1)
+                    st.metric("📊 Pages Fetched", min(page - 1, MAX_PAGES))
                 
                 # Show details in expandable sections
                 with st.expander(f"✅ Already in Ada ({len(comparison['existing'])})"):
@@ -1325,4 +1333,4 @@ with col2:
     st.markdown("• External update timestamp")
 
 st.markdown("---")
-st.markdown("*Version 4.3 - With immediate pagination stop*")
+st.markdown("*Version 4.4 - With maximum 20 pages limit*")
