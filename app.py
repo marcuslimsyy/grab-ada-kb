@@ -38,10 +38,25 @@ def log_api_call(method, url, status_code, success, details="", response_data=No
     if len(st.session_state.api_call_log) > 50:
         st.session_state.api_call_log = st.session_state.api_call_log[-50:]
 
+def clean_api_key(api_key):
+    """Clean API key to ensure it only contains valid characters"""
+    if not api_key:
+        return ""
+    # Remove any non-ASCII characters and strip whitespace
+    cleaned = ''.join(char for char in api_key.strip() if ord(char) < 128)
+    return cleaned
+
 def validate_ada_connection(instance_name, api_key):
     """Validate Ada API connection by testing the knowledge sources endpoint"""
     if not all([instance_name, api_key]):
         return False, "Missing instance name or API key"
+    
+    # Clean the API key
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
     
     url = f"https://{instance_name}.ada.support/api/v2/knowledge/sources"
     headers = {
@@ -73,6 +88,8 @@ def validate_ada_connection(instance_name, api_key):
         return False, "Connection timeout - check instance name"
     except requests.exceptions.ConnectionError:
         return False, "Connection error - check instance name and internet connection"
+    except UnicodeEncodeError:
+        return False, "API key contains invalid characters. Please check your API key."
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
@@ -213,6 +230,13 @@ def delete_ada_article(instance_name, api_key, article_id):
     if not all([instance_name, api_key, article_id]):
         return False, "Missing required parameters"
     
+    # Clean inputs
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
+    
     url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -239,6 +263,8 @@ def delete_ada_article(instance_name, api_key, article_id):
         else:
             return False, f"HTTP {response.status_code}: {response.text}"
             
+    except UnicodeEncodeError:
+        return False, "API key contains invalid characters"
     except requests.exceptions.RequestException as e:
         log_api_call(
             method="DELETE",
@@ -250,26 +276,126 @@ def delete_ada_article(instance_name, api_key, article_id):
         return False, f"Error deleting article: {str(e)}"
 
 def compare_articles(grab_articles, ada_articles):
-    """Compare Grab articles with Ada articles"""
-    grab_ids = set(str(article['id']) for article in grab_articles)
-    ada_ids = set(str(article.get('id', '')) for article in ada_articles)
+    """Enhanced comparison of Grab articles with Ada articles using both ID and name"""
     
-    # Articles in both
-    existing_ids = grab_ids.intersection(ada_ids)
-    existing_articles = [article for article in grab_articles if str(article['id']) in existing_ids]
+    # Debug info
+    st.write("🔍 **Debug Information:**")
+    st.write(f"- Grab articles count: {len(grab_articles)}")
+    st.write(f"- Ada articles count: {len(ada_articles)}")
     
-    # New articles (in Grab but not in Ada)
-    new_ids = grab_ids - ada_ids
-    new_articles = [article for article in grab_articles if str(article['id']) in new_ids]
+    if grab_articles:
+        st.write(f"- Sample Grab ID: `{grab_articles[0].get('id')}`")
+        st.write(f"- Sample Grab Name: `{grab_articles[0].get('name', '')[:50]}...`")
+    if ada_articles:
+        st.write(f"- Sample Ada ID: `{ada_articles[0].get('id')}`")
+        st.write(f"- Sample Ada Name: `{ada_articles[0].get('name', '')[:50]}...`")
     
-    # Missing articles (in Ada but not in current Grab scrape)
-    missing_ids = ada_ids - grab_ids
-    missing_articles = [article for article in ada_articles if str(article.get('id', '')) in missing_ids]
+    # Create ID sets with cleaning
+    grab_ids = set()
+    ada_ids = set()
+    
+    for article in grab_articles:
+        if article.get('id'):
+            clean_id = str(article['id']).strip()
+            grab_ids.add(clean_id)
+    
+    for article in ada_articles:
+        if article.get('id'):
+            clean_id = str(article['id']).strip()
+            ada_ids.add(clean_id)
+    
+    # Create name sets for additional validation
+    grab_names = set()
+    ada_names = set()
+    
+    for article in grab_articles:
+        if article.get('name'):
+            clean_name = article['name'].strip()
+            grab_names.add(clean_name)
+    
+    for article in ada_articles:
+        if article.get('name'):
+            clean_name = article['name'].strip()
+            ada_names.add(clean_name)
+    
+    # Show sample IDs for debugging
+    st.write(f"- Grab IDs sample (first 3): `{list(grab_ids)[:3]}`")
+    st.write(f"- Ada IDs sample (first 3): `{list(ada_ids)[:3]}`")
+    
+    # Find matches
+    existing_by_id = grab_ids.intersection(ada_ids)
+    existing_by_name = grab_names.intersection(ada_names)
+    
+    st.write(f"- **Matched by ID:** {len(existing_by_id)}")
+    st.write(f"- **Matched by Name:** {len(existing_by_name)}")
+    st.write(f"- **Matched by Name only:** {len(existing_by_name - existing_by_id)}")
+    
+    # Categorize articles
+    existing_articles = []
+    new_articles = []
+    
+    # Debug: Track specific problematic articles
+    debug_matches = []
+    
+    for article in grab_articles:
+        article_id = str(article['id']).strip() if article.get('id') else ''
+        article_name = article.get('name', '').strip()
+        
+        # Check if exists by ID or name
+        exists_by_id = article_id in existing_by_id
+        exists_by_name = article_name in existing_by_name
+        
+        if exists_by_id or exists_by_name:
+            existing_articles.append(article)
+            match_type = []
+            if exists_by_id:
+                match_type.append("ID")
+            if exists_by_name:
+                match_type.append("Name")
+            
+            debug_matches.append({
+                'id': article_id,
+                'name': article_name[:50],
+                'match_type': '+'.join(match_type)
+            })
+        else:
+            new_articles.append(article)
+            # Debug: Show "new" articles for inspection
+            debug_matches.append({
+                'id': article_id,
+                'name': article_name[:50],
+                'match_type': 'NEW'
+            })
+    
+    # Find missing articles (in Ada but not in Grab)
+    ada_ids_not_in_grab = ada_ids - grab_ids
+    missing_articles = [article for article in ada_articles 
+                       if str(article.get('id', '')).strip() in ada_ids_not_in_grab]
+    
+    # Show debug results
+    st.write("---")
+    st.write("🔍 **First 10 Articles Classification:**")
+    for i, match in enumerate(debug_matches[:10]):
+        status_icon = "✅" if match['match_type'] != 'NEW' else "🆕"
+        st.write(f"{status_icon} `{match['id']}` - {match['name']} - **{match['match_type']}**")
+    
+    st.write("---")
+    st.write("📊 **Final Comparison Summary:**")
+    st.write(f"- ✅ **Existing:** {len(existing_articles)}")
+    st.write(f"- 🆕 **New:** {len(new_articles)}")
+    st.write(f"- ❌ **Missing/Orphaned:** {len(missing_articles)}")
     
     return {
         'existing': existing_articles,
         'new': new_articles,
-        'missing': missing_articles
+        'missing': missing_articles,
+        'debug_info': {
+            'grab_ids_count': len(grab_ids),
+            'ada_ids_count': len(ada_ids),
+            'matched_by_id': len(existing_by_id),
+            'matched_by_name_only': len(existing_by_name - existing_by_id),
+            'sample_matches': debug_matches[:10]
+        }
     }
 
 def convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id, override_language=None, name_prefix=None, id_prefix=None):
@@ -320,6 +446,13 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
     """Create a single article in Ada using bulk endpoint"""
     if not all([instance_name, api_key]):
         return False, "Missing configuration"
+    
+    # Clean inputs
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
     
     article_name = article_data.get('name', 'Unknown')
     article_id = article_data.get('id', 'Unknown')
@@ -386,6 +519,8 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
         
         return False, "Request timed out"
         
+    except UnicodeEncodeError:
+        return False, "API key contains invalid characters"
     except requests.exceptions.RequestException as e:
         with status_container.container():
             st.error(f"❌ **Network error creating:** {article_name}")
@@ -406,6 +541,13 @@ def create_articles_individually_with_status(articles, instance_name, knowledge_
     """Create articles in Ada knowledge base with real-time status updates"""
     if not all([instance_name, knowledge_source_id, api_key]):
         return False, "Missing configuration"
+    
+    # Clean inputs
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
     
     ada_articles = convert_to_ada_format(articles, user_type, language_locale, knowledge_source_id, override_language, name_prefix, id_prefix)
     
@@ -492,6 +634,13 @@ def create_ada_knowledge_source(instance_name, api_key, source_name, current_use
     if not all([instance_name, api_key, source_name]):
         return False, "Missing required fields"
     
+    # Clean inputs
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
+    
     url = f"https://{instance_name}.ada.support/api/v2/knowledge/sources"
     
     headers = {
@@ -523,6 +672,8 @@ def create_ada_knowledge_source(instance_name, api_key, source_name, current_use
         returned_source_id = result.get('data', {}).get('id', source_id)
         
         return True, {"source_id": returned_source_id, "response": result}
+    except UnicodeEncodeError:
+        return False, "API key contains invalid characters"
     except requests.exceptions.RequestException as e:
         error_detail = ""
         if hasattr(e, 'response') and e.response is not None:
@@ -546,6 +697,13 @@ def list_ada_knowledge_sources(instance_name, api_key):
     if not all([instance_name, api_key]):
         return False, "Missing required fields"
     
+    # Clean inputs
+    api_key = clean_api_key(api_key)
+    instance_name = instance_name.strip()
+    
+    if not api_key:
+        return False, "API key contains invalid characters"
+    
     url = f"https://{instance_name}.ada.support/api/v2/knowledge/sources"
     
     headers = {
@@ -566,6 +724,8 @@ def list_ada_knowledge_sources(instance_name, api_key):
         
         response.raise_for_status()
         return True, response.json()
+    except UnicodeEncodeError:
+        return False, "API key contains invalid characters"
     except requests.exceptions.RequestException as e:
         log_api_call(
             method="GET",
@@ -583,14 +743,6 @@ st.sidebar.header("Configuration")
 st.sidebar.subheader("🔐 Ada API Configuration")
 instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
 api_key = st.sidebar.text_input("API Key:", type="password")
-
-if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
-    with st.sidebar.spinner("Testing connection..."):
-        success, message = validate_ada_connection(instance_name, api_key)
-        if success:
-            st.sidebar.success(f"✅ {message}")
-        else:
-            st.sidebar.error(f"❌ {message}")
 
 # Show current configuration status
 if instance_name and api_key:
@@ -802,91 +954,102 @@ if 'production_articles' in st.session_state:
                 page_status = st.empty()
                 articles_status = st.empty()
             
-            # Pagination with hard limit
-            while page <= MAX_PAGES:
-                url = f"https://{instance_name}.ada.support/api/v2/knowledge/articles/"
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                params = {
-                    "knowledge_source_id": comparison_knowledge_source_id,
-                    "page": page
-                }
-                
-                with page_status:
-                    st.write(f"🔄 **Fetching page {page}/{MAX_PAGES}...**")
-                
-                try:
-                    start_time = time.time()
-                    response = requests.get(url, headers=headers, params=params, timeout=30)
-                    end_time = time.time()
-                    
-                    log_api_call(
-                        method="GET",
-                        url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
-                        status_code=response.status_code,
-                        success=response.status_code == 200,
-                        details=f"Fetch Ada articles page {page}"
-                    )
-                    
-                    if response.status_code != 200:
-                        with page_status:
-                            st.error(f"❌ **Failed to fetch page {page}:** HTTP {response.status_code}")
-                        st.error(f"Failed to fetch articles from Ada: {response.text}")
-                        break
-                    
-                    data = response.json()
-                    articles = data.get('data', [])
-                    
-                    # Stop if no articles in response
-                    if not articles:
-                        with page_status:
-                            st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
-                        break
-                    
-                    # We have articles, add them and continue
-                    all_ada_articles.extend(articles)
-                    total_fetched += len(articles)
-                    
-                    with page_status:
-                        st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
-                    
-                    with articles_status:
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("📊 Total Articles Fetched", total_fetched)
-                        with col2:
-                            st.metric("📄 Current Page", page)
-                        with col3:
-                            st.metric("📋 Remaining Pages", MAX_PAGES - page)
-                    
-                    # Move to next page
-                    page += 1
-                    time.sleep(0.1)  # Small delay
-                        
-                except requests.exceptions.RequestException as e:
-                    log_api_call(
-                        method="GET",
-                        url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
-                        status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
-                        success=False,
-                        details=f"Error fetching Ada articles page {page}: {str(e)}"
-                    )
-                    
-                    with page_status:
-                        st.error(f"❌ **Error fetching page {page}:** {str(e)}")
-                    st.error(f"Error fetching articles from Ada: {str(e)}")
-                    break
+            # Clean inputs
+            api_key_clean = clean_api_key(api_key)
+            instance_name_clean = instance_name.strip()
             
-            # Show final fetch summary
-            if page > MAX_PAGES:
-                with page_status:
-                    st.warning(f"🛑 **Stopped at maximum limit of {MAX_PAGES} pages. Fetched {total_fetched} articles.**")
+            if not api_key_clean:
+                st.error("API key contains invalid characters")
             else:
-                with page_status:
-                    st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
+                # Pagination with hard limit
+                while page <= MAX_PAGES:
+                    url = f"https://{instance_name_clean}.ada.support/api/v2/knowledge/articles/"
+                    headers = {
+                        "Authorization": f"Bearer {api_key_clean}",
+                        "Content-Type": "application/json"
+                    }
+                    
+                    params = {
+                        "knowledge_source_id": comparison_knowledge_source_id,
+                        "page": page
+                    }
+                    
+                    with page_status:
+                        st.write(f"🔄 **Fetching page {page}/{MAX_PAGES}...**")
+                    
+                    try:
+                        start_time = time.time()
+                        response = requests.get(url, headers=headers, params=params, timeout=30)
+                        end_time = time.time()
+                        
+                        log_api_call(
+                            method="GET",
+                            url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
+                            status_code=response.status_code,
+                            success=response.status_code == 200,
+                            details=f"Fetch Ada articles page {page}"
+                        )
+                        
+                        if response.status_code != 200:
+                            with page_status:
+                                st.error(f"❌ **Failed to fetch page {page}:** HTTP {response.status_code}")
+                            st.error(f"Failed to fetch articles from Ada: {response.text}")
+                            break
+                        
+                        data = response.json()
+                        articles = data.get('data', [])
+                        
+                        # Stop if no articles in response
+                        if not articles:
+                            with page_status:
+                                st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
+                            break
+                        
+                        # We have articles, add them and continue
+                        all_ada_articles.extend(articles)
+                        total_fetched += len(articles)
+                        
+                        with page_status:
+                            st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
+                        
+                        with articles_status:
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                st.metric("📊 Total Articles Fetched", total_fetched)
+                            with col2:
+                                st.metric("📄 Current Page", page)
+                            with col3:
+                                st.metric("📋 Remaining Pages", MAX_PAGES - page)
+                        
+                        # Move to next page
+                        page += 1
+                        time.sleep(0.1)  # Small delay
+                            
+                    except UnicodeEncodeError:
+                        with page_status:
+                            st.error(f"❌ **Unicode error on page {page}:** API key contains invalid characters")
+                        break
+                    except requests.exceptions.RequestException as e:
+                        log_api_call(
+                            method="GET",
+                            url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
+                            status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
+                            success=False,
+                            details=f"Error fetching Ada articles page {page}: {str(e)}"
+                        )
+                        
+                        with page_status:
+                            st.error(f"❌ **Error fetching page {page}:** {str(e)}")
+                        st.error(f"Error fetching articles from Ada: {str(e)}")
+                        break
+                
+                # Show final fetch summary
+                if page > MAX_PAGES:
+                    with page_status:
+                        st.warning(f"🛑 **Stopped at maximum limit of {MAX_PAGES} pages. Fetched {total_fetched} articles.**")
+                else:
+                    with page_status:
+                        st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
             
             if all_ada_articles:
                 with main_status:
@@ -895,27 +1058,14 @@ if 'production_articles' in st.session_state:
                 
                 with comparison_container:
                     st.subheader("🔍 Article Analysis")
-                    analysis_status = st.empty()
                     
-                    with analysis_status:
-                        st.write("🔄 **Comparing Grab articles with Ada articles...**")
-                    
-                    # Perform comparison
+                    # Perform enhanced comparison
                     grab_articles = st.session_state.production_articles
-                    
-                    with analysis_status:
-                        st.write(f"📊 **Analyzing {len(grab_articles)} Grab articles vs {len(all_ada_articles)} Ada articles...**")
-                    
-                    time.sleep(0.5)  # Small delay for visual effect
-                    
                     comparison = compare_articles(grab_articles, all_ada_articles)
                     
                     # Store comparison results
                     st.session_state.comparison_results = comparison
                     st.session_state.comparison_knowledge_source_id = comparison_knowledge_source_id
-                    
-                    with analysis_status:
-                        st.success("✅ **Analysis complete!**")
                 
                 main_progress.progress(1.0)
                 
@@ -1033,7 +1183,7 @@ if 'production_articles' in st.session_state:
                                     st.write(f"📋 **Article ID:** `{article_id}`")
                                 
                                 start_time = time.time()
-                                success, message = delete_ada_article(instance_name, api_key, article_id)
+                                success, message = delete_ada_article(instance_name_clean, api_key_clean, article_id)
                                 end_time = time.time()
                                 
                                 if success:
@@ -1324,6 +1474,7 @@ with col1:
 with col2:
     st.markdown("**Key Features:**")
     st.markdown("• Real-time upload status")
+    st.markdown("• Enhanced article comparison")
     st.markdown("• Live comparison logging")
     st.markdown("• Article comparison with Ada KB")
     st.markdown("• Automatic orphaned article cleanup")
@@ -1333,4 +1484,4 @@ with col2:
     st.markdown("• External update timestamp")
 
 st.markdown("---")
-st.markdown("*Version 4.4 - With maximum 20 pages limit*")
+st.markdown("*Version 5.0 - With enhanced comparison debugging*")
