@@ -1003,69 +1003,42 @@ if 'production_articles' in st.session_state:
             if not api_key_clean:
                 st.error("API key contains invalid characters")
             else:
-                # Pagination with hard limit
-                while page <= MAX_PAGES:
-                    url = f"https://{instance_name_clean}.ada.support/api/v2/knowledge/articles/"
-                    headers = {
-                        "Authorization": f"Bearer {api_key_clean}",
-                        "Content-Type": "application/json"
-                    }
-                    
-                    params = {
-                        "knowledge_source_id": comparison_knowledge_source_id,
-                        "page": page
-                    }
-                    
-                    with page_status:
-                        st.write(f"🔄 **Fetching page {page}/{MAX_PAGES}...**")
-                    
-                    try:
-                        start_time = time.time()
-                        response = requests.get(url, headers=headers, params=params, timeout=30)
-                        end_time = time.time()
-                        
-                        log_api_call(
-                            method="GET",
-                            url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
-                            status_code=response.status_code,
-                            success=response.status_code == 200,
-                            details=f"Fetch Ada articles page {page}"
-                        )
-                        
-                        if response.status_code != 200:
-                            with page_status:
-                                st.error(f"❌ **Failed to fetch page {page}:** HTTP {response.status_code}")
-                            st.error(f"Failed to fetch articles from Ada: {response.text}")
-                            break
-                        
-                        data = response.json()
-                        articles = data.get('data', [])
-                        
-                        # Stop if no articles in response
-                        if not articles:
-                            with page_status:
-                                st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
-                            break
-                        
-                        # We have articles, add them and continue
-                        all_ada_articles.extend(articles)
-                        total_fetched += len(articles)
-                        
-                        with page_status:
-                            st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
-                        
-                        with articles_status:
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("📊 Total Articles Fetched", total_fetched)
-                            with col2:
-                                st.metric("📄 Current Page", page)
-                            with col3:
-                                st.metric("📋 Remaining Pages", MAX_PAGES - page)
-                        
-                        # Move to next page
-                        page += 1
-                        time.sleep(0.1)  # Small delay
+# Pagination with proper next_page_url detection
+while True:  # Remove page limit
+    # ... keep all the existing request code the same ...
+    
+    # Stop if no articles in response
+    if not articles:
+        with page_status:
+            st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
+        break
+    
+    # We have articles, add them and continue
+    all_ada_articles.extend(articles)
+    total_fetched += len(articles)
+    
+    with page_status:
+        st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
+    
+    with articles_status:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📊 Total Articles Fetched", total_fetched)
+        with col2:
+            st.metric("📄 Current Page", page)
+    
+    # Check for next page using next_page_url (NEW LOGIC)
+    meta = data.get('meta', {})
+    next_page_url = meta.get('next_page_url')
+    
+    if not next_page_url:
+        with page_status:
+            st.info(f"✅ **No next_page_url found - final page reached**")
+        break
+    
+    # Move to next page
+    page += 1
+    time.sleep(0.1)
                             
                     except UnicodeEncodeError:
                         with page_status:
