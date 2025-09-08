@@ -786,6 +786,15 @@ st.sidebar.subheader("🔐 Ada API Configuration")
 instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
 api_key = st.sidebar.text_input("API Key:", type="password")
 
+# Test connection button
+if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
+    with st.sidebar.spinner("Testing connection..."):
+        success, message = validate_ada_connection(instance_name, api_key)
+        if success:
+            st.sidebar.success(f"✅ {message}")
+        else:
+            st.sidebar.error(f"❌ {message}")
+
 # Show current configuration status
 if instance_name and api_key:
     st.sidebar.success("🟢 Ada API configured")
@@ -956,7 +965,7 @@ if 'production_articles' in st.session_state:
 
 st.divider()
 
-# Article Comparison Section with next_page_url pagination
+# Article Comparison Section with FIXED pagination
 st.header("🔍 Compare with Ada Knowledge Base")
 
 if 'production_articles' in st.session_state:
@@ -1001,29 +1010,41 @@ if 'production_articles' in st.session_state:
             if not api_key_clean:
                 st.error("API key contains invalid characters")
             else:
-                # Pagination with next_page_url detection
-                while True:
-                    url = f"https://{instance_name_clean}.ada.support/api/v2/knowledge/articles/"
+                # FIXED Pagination Logic
+                current_url = f"https://{instance_name_clean}.ada.support/api/v2/knowledge/articles/"
+                
+                while current_url:  # Continue while we have a URL to fetch
                     headers = {
                         "Authorization": f"Bearer {api_key_clean}",
                         "Content-Type": "application/json"
                     }
                     
-                    params = {
-                        "knowledge_source_id": comparison_knowledge_source_id
-                    }
+                    # Only add knowledge_source_id parameter on first request
+                    # Subsequent requests use the full next_page_url
+                    if page == 1:
+                        params = {
+                            "knowledge_source_id": comparison_knowledge_source_id
+                        }
+                    else:
+                        params = {}  # next_page_url already contains all necessary parameters
                     
                     with page_status:
                         st.write(f"🔄 **Fetching page {page}...**")
+                        if page > 1:
+                            st.write(f"📍 **URL:** `{current_url[:80]}...`")
                     
                     try:
                         start_time = time.time()
-                        response = requests.get(url, headers=headers, params=params, timeout=30)
+                        if page == 1:
+                            response = requests.get(current_url, headers=headers, params=params, timeout=30)
+                        else:
+                            # Use the next_page_url directly (it already contains all parameters)
+                            response = requests.get(current_url, headers=headers, timeout=30)
                         end_time = time.time()
                         
                         log_api_call(
                             method="GET",
-                            url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
+                            url=current_url if page > 1 else f"{current_url}?knowledge_source_id={comparison_knowledge_source_id}",
                             status_code=response.status_code,
                             success=response.status_code == 200,
                             details=f"Fetch Ada articles page {page}"
@@ -1038,18 +1059,16 @@ if 'production_articles' in st.session_state:
                         data = response.json()
                         articles = data.get('data', [])
                         
-                        # Stop if no articles in response
-                        if not articles:
+                        # Add articles if we have them
+                        if articles:
+                            all_ada_articles.extend(articles)
+                            total_fetched += len(articles)
+                            
                             with page_status:
-                                st.info(f"✅ **Page {page} returned 0 articles - stopping pagination**")
-                            break
-                        
-                        # We have articles, add them and continue
-                        all_ada_articles.extend(articles)
-                        total_fetched += len(articles)
-                        
-                        with page_status:
-                            st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
+                                st.success(f"✅ **Page {page} fetched:** {len(articles)} articles ({end_time - start_time:.2f}s)")
+                        else:
+                            with page_status:
+                                st.info(f"ℹ️ **Page {page} returned 0 articles**")
                         
                         with articles_status:
                             col1, col2 = st.columns(2)
@@ -1060,16 +1079,16 @@ if 'production_articles' in st.session_state:
                         
                         # Check for next page using next_page_url
                         meta = data.get('meta', {})
-                        next_page_url = meta.get('next_page_url')
+                        current_url = meta.get('next_page_url')  # This becomes None when no more pages
                         
-                        if not next_page_url:
+                        if not current_url:
                             with page_status:
-                                st.info(f"✅ **No next_page_url found - final page reached**")
+                                st.info(f"✅ **No next_page_url found - pagination complete**")
                             break
                         
                         # Move to next page
                         page += 1
-                        time.sleep(0.1)
+                        time.sleep(0.1)  # Small delay between requests
                             
                     except UnicodeEncodeError:
                         with page_status:
@@ -1078,7 +1097,7 @@ if 'production_articles' in st.session_state:
                     except requests.exceptions.RequestException as e:
                         log_api_call(
                             method="GET",
-                            url=f"{url}?knowledge_source_id={comparison_knowledge_source_id}&page={page}",
+                            url=current_url,
                             status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
                             success=False,
                             details=f"Error fetching Ada articles page {page}: {str(e)}"
@@ -1091,7 +1110,10 @@ if 'production_articles' in st.session_state:
                 
                 # Show final fetch summary
                 with page_status:
-                    st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
+                    if total_fetched > 0:
+                        st.success(f"🎉 **Pagination complete! Fetched {total_fetched} articles from {page-1} pages**")
+                    else:
+                        st.warning(f"⚠️ **No articles found in knowledge source `{comparison_knowledge_source_id}`**")
             
             if all_ada_articles:
                 with main_status:
@@ -1269,7 +1291,7 @@ if 'production_articles' in st.session_state:
                 main_progress.progress(1.0)
                 with main_status:
                     st.write("❌ **Comparison failed - no articles fetched from Ada**")
-                st.error("Failed to fetch articles from Ada knowledge base")
+                st.error("Failed to fetch articles from Ada knowledge base or knowledge source is empty")
 else:
     st.info("👆 Please fetch articles from Grab first before comparing")
 
@@ -1526,4 +1548,4 @@ with col2:
     st.markdown("• External update timestamp")
 
 st.markdown("---")
-st.markdown("*Version 5.1 - With numeric ID comparison and proper pagination*")
+st.markdown("*Version 5.2 - Fixed pagination logic with proper next_page_url handling*")
