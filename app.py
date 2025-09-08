@@ -276,7 +276,8 @@ def delete_ada_article(instance_name, api_key, article_id):
         return False, f"Error deleting article: {str(e)}"
 
 def compare_articles(grab_articles, ada_articles):
-    """Enhanced comparison of Grab articles with Ada articles using both ID and name"""
+    """Enhanced comparison of Grab articles with Ada articles using numeric ID extraction"""
+    import re
     
     # Debug info
     st.write("🔍 **Debug Information:**")
@@ -290,19 +291,35 @@ def compare_articles(grab_articles, ada_articles):
         st.write(f"- Sample Ada ID: `{ada_articles[0].get('id')}`")
         st.write(f"- Sample Ada Name: `{ada_articles[0].get('name', '')[:50]}...`")
     
-    # Create ID sets with cleaning
+    def extract_numeric_id(article_id):
+        """Extract only numeric part from article ID using regex"""
+        if not article_id:
+            return ""
+        # Extract all digits from the ID
+        numeric_match = re.search(r'(\d+)', str(article_id))
+        return numeric_match.group(1) if numeric_match else str(article_id)
+    
+    # Create ID sets with numeric extraction
     grab_ids = set()
     ada_ids = set()
     
+    # Store mapping of numeric ID to original article for reference
+    grab_id_mapping = {}
+    ada_id_mapping = {}
+    
     for article in grab_articles:
         if article.get('id'):
-            clean_id = str(article['id']).strip()
-            grab_ids.add(clean_id)
+            original_id = str(article['id']).strip()
+            numeric_id = extract_numeric_id(original_id)
+            grab_ids.add(numeric_id)
+            grab_id_mapping[numeric_id] = original_id
     
     for article in ada_articles:
         if article.get('id'):
-            clean_id = str(article['id']).strip()
-            ada_ids.add(clean_id)
+            original_id = str(article['id']).strip()
+            numeric_id = extract_numeric_id(original_id)
+            ada_ids.add(numeric_id)
+            ada_id_mapping[numeric_id] = original_id
     
     # Create name sets for additional validation
     grab_names = set()
@@ -319,16 +336,33 @@ def compare_articles(grab_articles, ada_articles):
             ada_names.add(clean_name)
     
     # Show sample IDs for debugging
-    st.write(f"- Grab IDs sample (first 3): `{list(grab_ids)[:3]}`")
-    st.write(f"- Ada IDs sample (first 3): `{list(ada_ids)[:3]}`")
+    st.write("🔢 **Numeric ID Extraction Examples:**")
+    sample_grab_ids = list(grab_ids)[:3]
+    sample_ada_ids = list(ada_ids)[:3]
+    
+    for i, numeric_id in enumerate(sample_grab_ids):
+        original = grab_id_mapping.get(numeric_id, "")
+        st.write(f"  - Grab: `{original}` → `{numeric_id}`")
+    
+    for i, numeric_id in enumerate(sample_ada_ids):
+        original = ada_id_mapping.get(numeric_id, "")
+        st.write(f"  - Ada: `{original}` → `{numeric_id}`")
     
     # Find matches
     existing_by_id = grab_ids.intersection(ada_ids)
     existing_by_name = grab_names.intersection(ada_names)
     
-    st.write(f"- **Matched by ID:** {len(existing_by_id)}")
+    st.write(f"- **Matched by Numeric ID:** {len(existing_by_id)}")
     st.write(f"- **Matched by Name:** {len(existing_by_name)}")
     st.write(f"- **Matched by Name only:** {len(existing_by_name - existing_by_id)}")
+    
+    # Show some matched IDs
+    if existing_by_id:
+        st.write("✅ **Sample Matched Numeric IDs:**")
+        for numeric_id in list(existing_by_id)[:5]:
+            grab_original = grab_id_mapping.get(numeric_id, "")
+            ada_original = ada_id_mapping.get(numeric_id, "")
+            st.write(f"  - `{numeric_id}`: Grab=`{grab_original}` ↔ Ada=`{ada_original}`")
     
     # Categorize articles
     existing_articles = []
@@ -338,23 +372,25 @@ def compare_articles(grab_articles, ada_articles):
     debug_matches = []
     
     for article in grab_articles:
-        article_id = str(article['id']).strip() if article.get('id') else ''
+        original_id = str(article['id']).strip() if article.get('id') else ''
+        numeric_id = extract_numeric_id(original_id)
         article_name = article.get('name', '').strip()
         
-        # Check if exists by ID or name
-        exists_by_id = article_id in existing_by_id
+        # Check if exists by numeric ID or name
+        exists_by_id = numeric_id in existing_by_id
         exists_by_name = article_name in existing_by_name
         
         if exists_by_id or exists_by_name:
             existing_articles.append(article)
             match_type = []
             if exists_by_id:
-                match_type.append("ID")
+                match_type.append("Numeric ID")
             if exists_by_name:
                 match_type.append("Name")
             
             debug_matches.append({
-                'id': article_id,
+                'original_id': original_id,
+                'numeric_id': numeric_id,
                 'name': article_name[:50],
                 'match_type': '+'.join(match_type)
             })
@@ -362,22 +398,28 @@ def compare_articles(grab_articles, ada_articles):
             new_articles.append(article)
             # Debug: Show "new" articles for inspection
             debug_matches.append({
-                'id': article_id,
+                'original_id': original_id,
+                'numeric_id': numeric_id,
                 'name': article_name[:50],
                 'match_type': 'NEW'
             })
     
-    # Find missing articles (in Ada but not in Grab)
-    ada_ids_not_in_grab = ada_ids - grab_ids
-    missing_articles = [article for article in ada_articles 
-                       if str(article.get('id', '')).strip() in ada_ids_not_in_grab]
+    # Find missing articles (in Ada but not in Grab) - using numeric IDs
+    ada_numeric_ids_not_in_grab = ada_ids - grab_ids
+    missing_articles = []
+    for article in ada_articles:
+        if article.get('id'):
+            original_id = str(article['id']).strip()
+            numeric_id = extract_numeric_id(original_id)
+            if numeric_id in ada_numeric_ids_not_in_grab:
+                missing_articles.append(article)
     
     # Show debug results
     st.write("---")
     st.write("🔍 **First 10 Articles Classification:**")
     for i, match in enumerate(debug_matches[:10]):
         status_icon = "✅" if match['match_type'] != 'NEW' else "🆕"
-        st.write(f"{status_icon} `{match['id']}` - {match['name']} - **{match['match_type']}**")
+        st.write(f"{status_icon} `{match['original_id']}` (numeric: `{match['numeric_id']}`) - {match['name']} - **{match['match_type']}**")
     
     st.write("---")
     st.write("📊 **Final Comparison Summary:**")
