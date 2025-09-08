@@ -279,18 +279,6 @@ def compare_articles(grab_articles, ada_articles):
     """Enhanced comparison of Grab articles with Ada articles using numeric ID extraction"""
     import re
     
-    # Debug info
-    st.write("🔍 **Debug Information:**")
-    st.write(f"- Grab articles count: {len(grab_articles)}")
-    st.write(f"- Ada articles count: {len(ada_articles)}")
-    
-    if grab_articles:
-        st.write(f"- Sample Grab ID: `{grab_articles[0].get('id')}`")
-        st.write(f"- Sample Grab Name: `{grab_articles[0].get('name', '')[:50]}...`")
-    if ada_articles:
-        st.write(f"- Sample Ada ID: `{ada_articles[0].get('id')}`")
-        st.write(f"- Sample Ada Name: `{ada_articles[0].get('name', '')[:50]}...`")
-    
     def extract_numeric_id(article_id):
         """Extract only numeric part from article ID using regex"""
         if not article_id:
@@ -335,41 +323,13 @@ def compare_articles(grab_articles, ada_articles):
             clean_name = article['name'].strip()
             ada_names.add(clean_name)
     
-    # Show sample IDs for debugging
-    st.write("🔢 **Numeric ID Extraction Examples:**")
-    sample_grab_ids = list(grab_ids)[:3]
-    sample_ada_ids = list(ada_ids)[:3]
-    
-    for i, numeric_id in enumerate(sample_grab_ids):
-        original = grab_id_mapping.get(numeric_id, "")
-        st.write(f"  - Grab: `{original}` → `{numeric_id}`")
-    
-    for i, numeric_id in enumerate(sample_ada_ids):
-        original = ada_id_mapping.get(numeric_id, "")
-        st.write(f"  - Ada: `{original}` → `{numeric_id}`")
-    
     # Find matches
     existing_by_id = grab_ids.intersection(ada_ids)
     existing_by_name = grab_names.intersection(ada_names)
     
-    st.write(f"- **Matched by Numeric ID:** {len(existing_by_id)}")
-    st.write(f"- **Matched by Name:** {len(existing_by_name)}")
-    st.write(f"- **Matched by Name only:** {len(existing_by_name - existing_by_id)}")
-    
-    # Show some matched IDs
-    if existing_by_id:
-        st.write("✅ **Sample Matched Numeric IDs:**")
-        for numeric_id in list(existing_by_id)[:5]:
-            grab_original = grab_id_mapping.get(numeric_id, "")
-            ada_original = ada_id_mapping.get(numeric_id, "")
-            st.write(f"  - `{numeric_id}`: Grab=`{grab_original}` ↔ Ada=`{ada_original}`")
-    
     # Categorize articles
     existing_articles = []
     new_articles = []
-    
-    # Debug: Track specific problematic articles
-    debug_matches = []
     
     for article in grab_articles:
         original_id = str(article['id']).strip() if article.get('id') else ''
@@ -382,27 +342,8 @@ def compare_articles(grab_articles, ada_articles):
         
         if exists_by_id or exists_by_name:
             existing_articles.append(article)
-            match_type = []
-            if exists_by_id:
-                match_type.append("Numeric ID")
-            if exists_by_name:
-                match_type.append("Name")
-            
-            debug_matches.append({
-                'original_id': original_id,
-                'numeric_id': numeric_id,
-                'name': article_name[:50],
-                'match_type': '+'.join(match_type)
-            })
         else:
             new_articles.append(article)
-            # Debug: Show "new" articles for inspection
-            debug_matches.append({
-                'original_id': original_id,
-                'numeric_id': numeric_id,
-                'name': article_name[:50],
-                'match_type': 'NEW'
-            })
     
     # Find missing articles (in Ada but not in Grab) - using numeric IDs
     ada_numeric_ids_not_in_grab = ada_ids - grab_ids
@@ -414,19 +355,6 @@ def compare_articles(grab_articles, ada_articles):
             if numeric_id in ada_numeric_ids_not_in_grab:
                 missing_articles.append(article)
     
-    # Show debug results
-    st.write("---")
-    st.write("🔍 **First 10 Articles Classification:**")
-    for i, match in enumerate(debug_matches[:10]):
-        status_icon = "✅" if match['match_type'] != 'NEW' else "🆕"
-        st.write(f"{status_icon} `{match['original_id']}` (numeric: `{match['numeric_id']}`) - {match['name']} - **{match['match_type']}**")
-    
-    st.write("---")
-    st.write("📊 **Final Comparison Summary:**")
-    st.write(f"- ✅ **Existing:** {len(existing_articles)}")
-    st.write(f"- 🆕 **New:** {len(new_articles)}")
-    st.write(f"- ❌ **Missing/Orphaned:** {len(missing_articles)}")
-    
     return {
         'existing': existing_articles,
         'new': new_articles,
@@ -435,8 +363,7 @@ def compare_articles(grab_articles, ada_articles):
             'grab_ids_count': len(grab_ids),
             'ada_ids_count': len(ada_ids),
             'matched_by_id': len(existing_by_id),
-            'matched_by_name_only': len(existing_by_name - existing_by_id),
-            'sample_matches': debug_matches[:10]
+            'matched_by_name_only': len(existing_by_name - existing_by_id)
         }
     }
 
@@ -1121,8 +1048,6 @@ if 'production_articles' in st.session_state:
                 main_progress.progress(0.75)
                 
                 with comparison_container:
-                    st.subheader("🔍 Article Analysis")
-                    
                     # Perform enhanced comparison
                     grab_articles = st.session_state.production_articles
                     comparison = compare_articles(grab_articles, all_ada_articles)
@@ -1142,7 +1067,7 @@ if 'production_articles' in st.session_state:
                 # Summary metrics
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("✅ Already in Ada", len(comparison['existing']))
+                    st.metric("🔄 Articles to Update", len(comparison['existing']))
                 with col2:
                     st.metric("🆕 New Articles", len(comparison['new']))
                 with col3:
@@ -1159,7 +1084,7 @@ if 'production_articles' in st.session_state:
                     st.metric("📊 Pages Fetched", page - 1)
                 
                 # Show details in expandable sections
-                with st.expander(f"✅ Already in Ada ({len(comparison['existing'])})"):
+                with st.expander(f"🔄 Articles to Update ({len(comparison['existing'])})"):
                     if comparison['existing']:
                         existing_df = pd.DataFrame([{
                             'ID': article['id'],
@@ -1178,7 +1103,6 @@ if 'production_articles' in st.session_state:
                             'Content Length': len(article['body'])
                         } for article in comparison['new']])
                         st.dataframe(new_df)
-                        st.session_state.articles_to_upload = comparison['new']
                     else:
                         st.info("No new articles to upload")
                 
@@ -1300,20 +1224,33 @@ st.divider()
 # Upload to Ada
 st.header("📤 Upload Articles to Ada")
 
-# Determine which articles to upload
+# Determine which articles to upload - always allow upload
 articles_to_upload = None
+upload_description = ""
+
 if 'comparison_results' in st.session_state:
-    # Use new articles from comparison
-    articles_to_upload = st.session_state.comparison_results['new']
-    upload_source = "comparison"
-    st.info(f"📋 {len(articles_to_upload)} new articles ready for upload (from comparison)")
+    # Combine existing (for update) and new articles
+    existing_articles = st.session_state.comparison_results['existing']
+    new_articles = st.session_state.comparison_results['new']
+    articles_to_upload = existing_articles + new_articles
+    
+    if existing_articles and new_articles:
+        upload_description = f"📋 {len(articles_to_upload)} articles ready for upload ({len(existing_articles)} to update + {len(new_articles)} new)"
+    elif existing_articles:
+        upload_description = f"📋 {len(articles_to_upload)} articles ready for update (no new articles)"
+    elif new_articles:
+        upload_description = f"📋 {len(articles_to_upload)} new articles ready for upload"
+    else:
+        upload_description = "📋 No articles to upload or update"
+        
 elif 'production_articles' in st.session_state:
     # Use all production articles
     articles_to_upload = st.session_state.production_articles
-    upload_source = "all"
-    st.info(f"📋 {len(articles_to_upload)} articles ready for upload (all production articles)")
+    upload_description = f"📋 {len(articles_to_upload)} articles ready for upload (all production articles)"
 
-if articles_to_upload:
+if articles_to_upload is not None:  # Always show upload section if we have any articles
+    st.info(upload_description)
+    
     st.write(f"**Ready to upload {len(articles_to_upload)} articles to Ada**")
     
     # Auto-populate knowledge source ID
@@ -1389,8 +1326,8 @@ if articles_to_upload:
                 preview_df = pd.DataFrame(preview_summary)
                 st.dataframe(preview_df)
     
-    # Upload button
-    if st.button("📤 Start Upload with Live Status", type="primary"):
+    # Upload button - always enabled if we have articles
+    if len(articles_to_upload) > 0 and st.button("📤 Start Upload with Live Status", type="primary"):
         if not all([instance_name, api_key]):
             st.error("Please configure Ada API settings first")
         elif not knowledge_source_id:
@@ -1451,6 +1388,8 @@ if articles_to_upload:
                 
             else:
                 st.error(f"❌ Failed to upload articles: {result}")
+    elif len(articles_to_upload) == 0:
+        st.warning("⚠️ No articles available for upload. Please fetch articles first or run a comparison.")
 
 else:
     st.info("👆 Please fetch articles first before uploading to Ada")
@@ -1536,16 +1475,6 @@ with col1:
     st.markdown("Built with ❤️ using Streamlit")
 
 with col2:
-    st.markdown("**Key Features:**")
-    st.markdown("• Real-time upload status")
-    st.markdown("• Enhanced article comparison with regex")
-    st.markdown("• Proper pagination with next_page_url")
-    st.markdown("• Live comparison logging")
-    st.markdown("• Automatic orphaned article cleanup")
-    st.markdown("• Language override options")
-    st.markdown("• Name & ID prefix customization")
-    st.markdown("• Knowledge source management")
-    st.markdown("• External update timestamp")
+    st.markdown("---")
 
-st.markdown("---")
-st.markdown("*Version 5.2 - Fixed pagination logic with proper next_page_url handling*")
+st.markdown("*Version 5.3 - Cleaned up UI with combined upload functionality*")
