@@ -142,7 +142,11 @@ def is_empty_article(article):
 @st.cache_data
 def fetch_grab_data(user_type, language_locale):
     """Fetch data from Grab help articles API"""
-    url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
+    # MoveIt always uses driver endpoint with en-ph locale
+    if user_type == "moveit":
+        url = "https://help.grab.com/articles/v4/driver/en-ph.json"
+    else:
+        url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
     
     try:
         response = requests.get(url, timeout=30)
@@ -183,11 +187,36 @@ def extract_articles(data):
             'uuid': article.get('uuid'),
             'name': article.get('name'),
             'body': cleaned_body,
-            'raw_body': raw_body
+            'raw_body': raw_body,
+            'category_id': article.get('category_id'),
+            'section_id': article.get('section_id')
         }
         articles.append(article_data)
     
     return articles
+
+def filter_moveit_articles(articles):
+    """Filter articles for MoveIt category and section range"""
+    if not articles:
+        return []
+    
+    MOVEIT_CATEGORY_ID = 10000024
+    MOVEIT_SECTION_START = 40001122
+    MOVEIT_SECTION_END = 40001341
+    
+    moveit_articles = []
+    
+    for article in articles:
+        # Check if article belongs to MoveIt category and section range
+        category_id = article.get('category_id')
+        section_id = article.get('section_id')
+        
+        if (category_id == MOVEIT_CATEGORY_ID and 
+            section_id and 
+            MOVEIT_SECTION_START <= section_id <= MOVEIT_SECTION_END):
+            moveit_articles.append(article)
+    
+    return moveit_articles
 
 def filter_articles(articles, filter_empty=True):
     """Filter out empty articles"""
@@ -375,13 +404,9 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
     
     for article in articles:
         # Generate URL based on user type
-        if user_type in ['moveitpassenger', 'moveitdriver']:
-            if user_type == 'moveitpassenger':
-                mapped_user_type = 'passenger'
-            elif user_type == 'moveitdriver':
-                mapped_user_type = 'driver'
-            
-            article_url = f"https://help.moveit.com.ph/{mapped_user_type}/{language_locale}/{article['id']}"
+        if user_type == "moveit":
+            # MoveIt articles use driver/en-ph path on help.grab.com
+            article_url = f"https://help.grab.com/driver/en-ph/{article['id']}"
         else:
             article_url = f"https://help.grab.com/{user_type}/{language_locale}/{article['id']}"
         
@@ -732,13 +757,17 @@ else:
 st.sidebar.subheader("Grab API Parameters")
 user_type = st.sidebar.selectbox(
     "Select User Type:",
-    ["passenger", "driver", "merchant", "moveitdriver", "moveitpassenger"]
+    ["passenger", "driver", "merchant", "moveit"]
 )
 
 language_locale = st.sidebar.text_input(
     "Language-Locale (e.g., en-ph):",
     value="en-ph"
 )
+
+# Show info for MoveIt
+if user_type == "moveit":
+    st.sidebar.info("📍 MoveIt always uses driver/en-ph endpoint and filters by category 10000024")
 
 # Article filtering options
 st.sidebar.subheader("Article Filters")
@@ -835,7 +864,11 @@ st.divider()
 # Article Retrieval
 st.header("📥 Fetch Articles from Grab")
 
-current_url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
+# Display the URL that will be fetched
+if user_type == "moveit":
+    current_url = "https://help.grab.com/articles/v4/driver/en-ph.json"
+else:
+    current_url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
 st.write(f"**API URL:** {current_url}")
 
 if st.button("🔄 Fetch Articles from Grab", type="primary"):
@@ -844,6 +877,12 @@ if st.button("🔄 Fetch Articles from Grab", type="primary"):
         
         if data:
             all_articles = extract_articles(data)
+            
+            # Apply MoveIt filtering if needed
+            if user_type == "moveit":
+                original_count = len(all_articles)
+                all_articles = filter_moveit_articles(all_articles)
+                st.info(f"📍 MoveIt Filter: {len(all_articles)} articles (from category 10000024, sections 40001122-40001341) out of {original_count} total")
             
             if all_articles:
                 production_articles, filtered_articles, analysis = filter_articles(
@@ -1477,4 +1516,4 @@ with col1:
 with col2:
     st.markdown("---")
 
-st.markdown("*Version 5.3 - Cleaned up UI with combined upload functionality*")
+st.markdown("*Version 5.4 - Updated MoveIt article retrieval with filtering*")
