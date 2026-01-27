@@ -188,32 +188,32 @@ def extract_articles(data):
             'name': article.get('name'),
             'body': cleaned_body,
             'raw_body': raw_body,
-            'category_id': article.get('category_id'),
-            'section_id': article.get('section_id')
+            'parentId': article.get('parentId'),
+            'caseL1': article.get('caseL1'),
+            'caseL2': article.get('caseL2'),
+            'caseL3': article.get('caseL3'),
+            'position': article.get('position')
         }
         articles.append(article_data)
     
     return articles
 
 def filter_moveit_articles(articles):
-    """Filter articles for MoveIt category and section range"""
+    """Filter articles for MoveIt based on section ID range"""
     if not articles:
         return []
     
-    MOVEIT_CATEGORY_ID = 10000024
     MOVEIT_SECTION_START = 40001122
     MOVEIT_SECTION_END = 40001341
     
     moveit_articles = []
     
     for article in articles:
-        # Check if article belongs to MoveIt category and section range
-        category_id = article.get('category_id')
-        section_id = article.get('section_id')
+        # Filter by article ID range (which represents the section IDs)
+        article_id = article.get('id')
         
-        if (category_id == MOVEIT_CATEGORY_ID and 
-            section_id and 
-            MOVEIT_SECTION_START <= section_id <= MOVEIT_SECTION_END):
+        if (article_id and 
+            MOVEIT_SECTION_START <= article_id <= MOVEIT_SECTION_END):
             moveit_articles.append(article)
     
     return moveit_articles
@@ -767,7 +767,7 @@ language_locale = st.sidebar.text_input(
 
 # Show info for MoveIt
 if user_type == "moveit":
-    st.sidebar.info("📍 MoveIt always uses driver/en-ph endpoint and filters by category 10000024")
+    st.sidebar.info("📍 MoveIt always uses driver/en-ph endpoint and filters articles with IDs 40001122-40001341")
 
 # Article filtering options
 st.sidebar.subheader("Article Filters")
@@ -882,7 +882,7 @@ if st.button("🔄 Fetch Articles from Grab", type="primary"):
             if user_type == "moveit":
                 original_count = len(all_articles)
                 all_articles = filter_moveit_articles(all_articles)
-                st.info(f"📍 MoveIt Filter: {len(all_articles)} articles (from category 10000024, sections 40001122-40001341) out of {original_count} total")
+                st.info(f"📍 MoveIt Filter: {len(all_articles)} articles (IDs 40001122-40001341) out of {original_count} total")
             
             if all_articles:
                 production_articles, filtered_articles, analysis = filter_articles(
@@ -1516,4 +1516,4 @@ with col1:
 with col2:
     st.markdown("---")
 
-st.markdown("*Version 5.4 - Updated MoveIt article retrieval with filtering*")
+st.markdown("*Version 5.5 - Fixed MoveIt article filtering by ID range*")
