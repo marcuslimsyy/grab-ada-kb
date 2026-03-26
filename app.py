@@ -13,6 +13,9 @@ import html2text
 from datetime import datetime
 import time
 from collections import deque
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Rate limiting & retry constants ---
 _rate_limiter = deque(maxlen=100)  # sliding window: timestamps of last 100 API calls
@@ -525,9 +528,11 @@ def create_ada_article_with_status(instance_name, api_key, article_data, status_
             # Calculate wait before retry
             if response.status_code == 429:
                 retry_after = response.headers.get("Retry-After")
-                wait = float(retry_after) if retry_after else min(
-                    RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY
-                )
+                try:
+                    # Retry-After can be seconds (int) or an HTTP date string
+                    wait = min(float(retry_after), RETRY_MAX_DELAY)
+                except (TypeError, ValueError):
+                    wait = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
                 with status_container.container():
                     st.warning(f"⏳ **Rate limited (429).** Waiting {wait:.1f}s before retry {attempt + 1}/{MAX_RETRIES}...")
             else:
@@ -776,8 +781,8 @@ st.sidebar.header("Configuration")
 
 # Simple Ada API Configuration
 st.sidebar.subheader("🔐 Ada API Configuration")
-instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
-api_key = st.sidebar.text_input("API Key:", type="password")
+instance_name = st.sidebar.text_input("Instance Name (without .ada.support):", value=os.getenv("ADA_INSTANCE_NAME", ""))
+api_key = st.sidebar.text_input("API Key:", type="password", value=os.getenv("ADA_API_KEY", ""))
 
 # Test connection button
 if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
@@ -803,7 +808,7 @@ user_type = st.sidebar.selectbox(
 
 language_locale = st.sidebar.text_input(
     "Language-Locale (e.g., en-ph):",
-    value="en-ph"
+    value=os.getenv("GRAB_LANGUAGE_LOCALE", "en-ph")
 )
 
 # Show info for MoveIt
