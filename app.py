@@ -12,6 +12,32 @@ from bs4 import BeautifulSoup
 import html2text
 from datetime import datetime
 import time
+from collections import deque
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# --- Rate limiting & retry constants ---
+_rate_limiter = deque(maxlen=100)  # sliding window: timestamps of last 100 API calls
+RATE_LIMIT_REQUESTS = 100
+RATE_LIMIT_WINDOW = 60  # seconds
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+RETRY_MAX_DELAY = 60.0  # seconds
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def enforce_rate_limit():
+    """Block until we're within the 100 req/min rate limit (sliding window)."""
+    now = time.time()
+    if len(_rate_limiter) == RATE_LIMIT_REQUESTS:
+        oldest = _rate_limiter[0]
+        window_elapsed = now - oldest
+        if window_elapsed < RATE_LIMIT_WINDOW:
+            sleep_for = RATE_LIMIT_WINDOW - window_elapsed + 0.05  # small buffer
+            time.sleep(sleep_for)
+    _rate_limiter.append(time.time())
+
 
 # Set page title
 st.title("Grab Articles to Ada Knowledge Base Manager")
@@ -437,99 +463,119 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
     return ada_articles
 
 def create_ada_article_with_status(instance_name, api_key, article_data, status_container, index, total):
-    """Create a single article in Ada using bulk endpoint"""
+    """Create a single article in Ada using bulk endpoint with rate limiting and retry."""
     if not all([instance_name, api_key]):
         return False, "Missing configuration"
-    
-    # Clean inputs
+
     api_key = clean_api_key(api_key)
     instance_name = instance_name.strip()
-    
+
     if not api_key:
         return False, "API key contains invalid characters"
-    
+
     article_name = article_data.get('name', 'Unknown')
     article_id = article_data.get('id', 'Unknown')
-    
+
     with status_container.container():
         st.write(f"🔄 **Creating article {index}/{total}:** {article_name[:60]}{'...' if len(article_name) > 60 else ''}")
         st.write(f"📋 **Article ID:** `{article_id}`")
-    
+
     url = f"https://{instance_name}.ada.support/api/v2/knowledge/bulk/articles/"
-    
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
     payload = [article_data]
-    
-    try:
-        start_time = time.time()
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        end_time = time.time()
-        
-        log_api_call(
-            method="POST",
-            url=url,
-            status_code=response.status_code,
-            success=response.status_code in [200, 201],
-            details=f"Create article '{article_data.get('name', 'Unknown')}' (ID: {article_data.get('id', 'Unknown')})"
-        )
-        
-        if response.status_code in [200, 201]:
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            enforce_rate_limit()
+            start_time = time.time()
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            end_time = time.time()
+
+            log_api_call(
+                method="POST",
+                url=url,
+                status_code=response.status_code,
+                success=response.status_code in [200, 201],
+                details=f"Create article '{article_name}' (ID: {article_id}), attempt {attempt + 1}"
+            )
+
+            if response.status_code in [200, 201]:
+                with status_container.container():
+                    st.success(f"✅ **Successfully created:** {article_name}")
+                    st.write(f"⏱️ **Response Time:** {end_time - start_time:.2f}s")
+                    if attempt > 0:
+                        st.write(f"🔁 **Succeeded on attempt {attempt + 1}**")
+                    st.write("---")
+                return True, response.json()
+
+            # Non-retryable client error or retries exhausted
+            if response.status_code not in RETRYABLE_STATUS_CODES or attempt == MAX_RETRIES:
+                error_detail = ""
+                try:
+                    error_detail = response.json()
+                except Exception:
+                    error_detail = response.text
+                with status_container.container():
+                    st.error(f"❌ **Failed to create:** {article_name}")
+                    st.write(f"🚨 **Error Code:** {response.status_code}")
+                    st.write(f"📝 **Error Details:** {error_detail}")
+                    st.write("---")
+                return False, f"HTTP {response.status_code}: {error_detail}"
+
+            # Calculate wait before retry
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    # Retry-After can be seconds (int) or an HTTP date string
+                    wait = min(float(retry_after), RETRY_MAX_DELAY)
+                except (TypeError, ValueError):
+                    wait = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
+                with status_container.container():
+                    st.warning(f"⏳ **Rate limited (429).** Waiting {wait:.1f}s before retry {attempt + 1}/{MAX_RETRIES}...")
+            else:
+                wait = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
+                with status_container.container():
+                    st.warning(f"⚠️ **HTTP {response.status_code}.** Retrying in {wait:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+            time.sleep(wait)
+
+        except requests.exceptions.Timeout:
+            if attempt == MAX_RETRIES:
+                with status_container.container():
+                    st.error(f"⏰ **Timeout creating:** {article_name} (all {MAX_RETRIES} retries exhausted)")
+                    st.write("---")
+                log_api_call(method="POST", url=url, status_code=0, success=False,
+                             details=f"Timeout creating '{article_name}' after {MAX_RETRIES} retries")
+                return False, "Request timed out after retries"
+            wait = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
             with status_container.container():
-                st.success(f"✅ **Successfully created:** {article_name}")
-                st.write(f"⏱️ **Response Time:** {end_time - start_time:.2f} seconds")
-                st.write("---")
-            return True, response.json()
-        else:
-            error_detail = ""
-            try:
-                error_detail = response.json()
-            except:
-                error_detail = response.text
-            
+                st.warning(f"⏰ **Timeout.** Retrying in {wait:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+            time.sleep(wait)
+
+        except UnicodeEncodeError:
+            return False, "API key contains invalid characters"
+
+        except requests.exceptions.RequestException as e:
+            if attempt == MAX_RETRIES:
+                with status_container.container():
+                    st.error(f"❌ **Network error creating:** {article_name}")
+                    st.write(f"🚨 **Error:** {str(e)}")
+                    st.write("---")
+                log_api_call(
+                    method="POST", url=url,
+                    status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
+                    success=False,
+                    details=f"Error creating '{article_name}': {str(e)}"
+                )
+                return False, f"Error: {e}"
+            wait = min(RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 1), RETRY_MAX_DELAY)
             with status_container.container():
-                st.error(f"❌ **Failed to create:** {article_name}")
-                st.write(f"🚨 **Error Code:** {response.status_code}")
-                st.write(f"📝 **Error Details:** {error_detail}")
-                st.write("---")
-            
-            return False, f"HTTP {response.status_code}: {error_detail}"
-            
-    except requests.exceptions.Timeout:
-        with status_container.container():
-            st.error(f"⏰ **Timeout creating:** {article_name}")
-            st.write("---")
-        
-        log_api_call(
-            method="POST",
-            url=url,
-            status_code=0,
-            success=False,
-            details=f"Timeout creating article '{article_data.get('name', 'Unknown')}'"
-        )
-        
-        return False, "Request timed out"
-        
-    except UnicodeEncodeError:
-        return False, "API key contains invalid characters"
-    except requests.exceptions.RequestException as e:
-        with status_container.container():
-            st.error(f"❌ **Network error creating:** {article_name}")
-            st.write(f"🚨 **Error:** {str(e)}")
-            st.write("---")
-        
-        log_api_call(
-            method="POST",
-            url=url,
-            status_code=getattr(e.response, 'status_code', 0) if hasattr(e, 'response') else 0,
-            success=False,
-            details=f"Error creating article '{article_data.get('name', 'Unknown')}': {str(e)}"
-        )
-        
-        return False, f"Error: {e}"
+                st.warning(f"⚠️ **Network error.** Retrying in {wait:.1f}s (attempt {attempt + 1}/{MAX_RETRIES})...")
+            time.sleep(wait)
+
+    return False, "Max retries exceeded"
 
 def create_articles_individually_with_status(articles, instance_name, knowledge_source_id, api_key, user_type, language_locale, override_language=None, name_prefix=None, id_prefix=None):
     """Create articles in Ada knowledge base with real-time status updates"""
@@ -598,8 +644,8 @@ def create_articles_individually_with_status(articles, instance_name, knowledge_
                 "error": result
             })
         
-        time.sleep(0.1)
-    
+        # Rate limiting is now handled inside create_ada_article_with_status
+
     main_progress.progress(1.0)
     total_time = time.time() - start_time
     
@@ -735,8 +781,8 @@ st.sidebar.header("Configuration")
 
 # Simple Ada API Configuration
 st.sidebar.subheader("🔐 Ada API Configuration")
-instance_name = st.sidebar.text_input("Instance Name (without .ada.support):")
-api_key = st.sidebar.text_input("API Key:", type="password")
+instance_name = st.sidebar.text_input("Instance Name (without .ada.support):", value=os.getenv("ADA_INSTANCE_NAME", ""))
+api_key = st.sidebar.text_input("API Key:", type="password", value=os.getenv("ADA_API_KEY", ""))
 
 # Test connection button
 if instance_name and api_key and st.sidebar.button("🔄 Test Connection"):
@@ -762,7 +808,7 @@ user_type = st.sidebar.selectbox(
 
 language_locale = st.sidebar.text_input(
     "Language-Locale (e.g., en-ph):",
-    value="en-ph"
+    value=os.getenv("GRAB_LANGUAGE_LOCALE", "en-ph")
 )
 
 # Show info for MoveIt

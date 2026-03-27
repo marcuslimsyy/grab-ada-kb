@@ -3,3 +3,5 @@ requests
 pandas
 beautifulsoup4
 html2text
+python-dotenv
+pytest
