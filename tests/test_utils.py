@@ -144,3 +144,89 @@ class TestConvertToAdaFormat:
             knowledge_source_id="ks-xyz"
         )
         assert result[0]["knowledge_source_id"] == "ks-xyz"
+
+    def test_moveitpassenger_url_uses_moveit_domain(self):
+        articles = [
+            {"id": 16613564222105, "uuid": "u1", "name": "Unsubscribe", "body": "B",
+             "parentId": None, "caseL1": None, "caseL2": None, "caseL3": None, "position": 0}
+        ]
+        result = app.convert_to_ada_format(
+            articles, user_type="moveitpassenger", language_locale="en-ph",
+            knowledge_source_id="ks-123"
+        )
+        url = result[0]["url"]
+        assert url == "https://help.moveit.com.ph/passenger/en-ph/16613564222105"
+
+    def test_moveitpassenger_url_not_grab_domain(self):
+        articles = [
+            {"id": 123, "uuid": "u1", "name": "A", "body": "B",
+             "parentId": None, "caseL1": None, "caseL2": None, "caseL3": None, "position": 0}
+        ]
+        result = app.convert_to_ada_format(
+            articles, user_type="moveitpassenger", language_locale="en-ph",
+            knowledge_source_id="ks-123"
+        )
+        assert "help.grab.com" not in result[0]["url"]
+        assert "moveitpassenger" not in result[0]["url"]
+
+    def test_moveitdriver_url_uses_grab_driver_path(self):
+        articles = [
+            {"id": 40001000, "uuid": "u1", "name": "Driver Article", "body": "B",
+             "parentId": None, "caseL1": None, "caseL2": None, "caseL3": None, "position": 0}
+        ]
+        result = app.convert_to_ada_format(
+            articles, user_type="moveitdriver", language_locale="en-ph",
+            knowledge_source_id="ks-123"
+        )
+        assert result[0]["url"] == "https://help.grab.com/driver/en-ph/40001000"
+
+    def test_standard_user_type_url(self):
+        articles = [
+            {"id": 99, "uuid": "u1", "name": "A", "body": "B",
+             "parentId": None, "caseL1": None, "caseL2": None, "caseL3": None, "position": 0}
+        ]
+        for user_type, locale in [("passenger", "en-my"), ("driver", "en-sg"), ("merchant", "en-ph")]:
+            result = app.convert_to_ada_format(
+                articles, user_type=user_type, language_locale=locale,
+                knowledge_source_id="ks-123"
+            )
+            assert result[0]["url"] == f"https://help.grab.com/{user_type}/{locale}/99"
+
+
+class TestFilterMoveitArticles:
+
+    def test_filters_within_range(self):
+        articles = [
+            {"id": 40000747, "name": "First MoveIt"},
+            {"id": 40001000, "name": "Mid MoveIt"},
+            {"id": 40001434, "name": "Last MoveIt"},
+        ]
+        result = app.filter_moveit_articles(articles)
+        assert len(result) == 3
+
+    def test_excludes_outside_range(self):
+        articles = [
+            {"id": 40000746, "name": "Just below range"},
+            {"id": 40001000, "name": "In range"},
+            {"id": 40001435, "name": "Just above range"},
+        ]
+        result = app.filter_moveit_articles(articles)
+        assert len(result) == 1
+        assert result[0]["name"] == "In range"
+
+    def test_boundary_start(self):
+        articles = [{"id": 40000747, "name": "Start boundary"}]
+        assert len(app.filter_moveit_articles(articles)) == 1
+
+    def test_boundary_end(self):
+        articles = [{"id": 40001434, "name": "End boundary"}]
+        assert len(app.filter_moveit_articles(articles)) == 1
+
+    def test_empty_input(self):
+        assert app.filter_moveit_articles([]) == []
+
+    def test_none_id_skipped(self):
+        articles = [{"id": None, "name": "No ID"}, {"id": 40001000, "name": "Valid"}]
+        result = app.filter_moveit_articles(articles)
+        assert len(result) == 1
+        assert result[0]["name"] == "Valid"

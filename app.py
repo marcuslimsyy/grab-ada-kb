@@ -168,8 +168,8 @@ def is_empty_article(article):
 @st.cache_data
 def fetch_grab_data(user_type, language_locale):
     """Fetch data from Grab help articles API"""
-    # MoveIt always uses driver endpoint with en-ph locale
-    if user_type == "moveit":
+    # MoveIt Driver uses the driver endpoint; MoveIt Passenger uses the standard URL pattern
+    if user_type == "moveitdriver":
         url = "https://help.grab.com/articles/v4/driver/en-ph.json"
     else:
         url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
@@ -229,8 +229,8 @@ def filter_moveit_articles(articles):
     if not articles:
         return []
     
-    MOVEIT_SECTION_START = 40001122
-    MOVEIT_SECTION_END = 40001341
+    MOVEIT_SECTION_START = 40000747
+    MOVEIT_SECTION_END = 40001434
     
     moveit_articles = []
     
@@ -430,8 +430,11 @@ def convert_to_ada_format(articles, user_type, language_locale, knowledge_source
     
     for article in articles:
         # Generate URL based on user type
-        if user_type == "moveit":
-            # MoveIt articles use driver/en-ph path on help.grab.com
+        if user_type == "moveitpassenger":
+            # MoveIt Passenger articles live on help.moveit.com.ph
+            article_url = f"https://help.moveit.com.ph/passenger/{language_locale}/{article['id']}"
+        elif user_type == "moveitdriver":
+            # MoveIt Driver articles use driver/en-ph path on help.grab.com
             article_url = f"https://help.grab.com/driver/en-ph/{article['id']}"
         else:
             article_url = f"https://help.grab.com/{user_type}/{language_locale}/{article['id']}"
@@ -803,7 +806,7 @@ else:
 st.sidebar.subheader("Grab API Parameters")
 user_type = st.sidebar.selectbox(
     "Select User Type:",
-    ["passenger", "driver", "merchant", "moveit"]
+    ["passenger", "driver", "merchant", "moveitpassenger", "moveitdriver"]
 )
 
 language_locale = st.sidebar.text_input(
@@ -812,8 +815,10 @@ language_locale = st.sidebar.text_input(
 )
 
 # Show info for MoveIt
-if user_type == "moveit":
-    st.sidebar.info("📍 MoveIt always uses driver/en-ph endpoint and filters articles with IDs 40001122-40001341")
+if user_type == "moveitpassenger":
+    st.sidebar.info("📍 MoveIt Passenger uses a dedicated endpoint. All returned articles are MoveIt-specific.")
+elif user_type == "moveitdriver":
+    st.sidebar.info("📍 MoveIt Driver uses the driver/en-ph endpoint, filtered to article IDs 40000747-40001434.")
 
 # Article filtering options
 st.sidebar.subheader("Article Filters")
@@ -911,7 +916,7 @@ st.divider()
 st.header("📥 Fetch Articles from Grab")
 
 # Display the URL that will be fetched
-if user_type == "moveit":
+if user_type == "moveitdriver":
     current_url = "https://help.grab.com/articles/v4/driver/en-ph.json"
 else:
     current_url = f"https://help.grab.com/articles/v4/{user_type}/{language_locale}.json"
@@ -925,10 +930,10 @@ if st.button("🔄 Fetch Articles from Grab", type="primary"):
             all_articles = extract_articles(data)
             
             # Apply MoveIt filtering if needed
-            if user_type == "moveit":
+            if user_type == "moveitdriver":
                 original_count = len(all_articles)
                 all_articles = filter_moveit_articles(all_articles)
-                st.info(f"📍 MoveIt Filter: {len(all_articles)} articles (IDs 40001122-40001341) out of {original_count} total")
+                st.info(f"📍 MoveIt Driver Filter: {len(all_articles)} articles (IDs 40000747-40001434) out of {original_count} total")
             
             if all_articles:
                 production_articles, filtered_articles, analysis = filter_articles(
@@ -1562,4 +1567,4 @@ with col1:
 with col2:
     st.markdown("---")
 
-st.markdown("*Version 5.5 - Fixed MoveIt article filtering by ID range*")
+st.markdown("*Version 5.6 - Added MoveIt Passenger endpoint, renamed MoveIt to MoveIt Driver, fixed ID range*")
